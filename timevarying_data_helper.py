@@ -34,7 +34,7 @@ class TimevaryingDataset(torch.utils.data.Dataset):
             # when directly enumerating the dataset instead of using DataLoader
             # still need this if we use tensor to store our dataset?
             raise IndexError(f"Index {index} out of bounds (n_params={self.n_timesteps})")
-        return self.volumes[index+1]
+        return self.volumes[index]
 
     def __len__(self):
         return self.n_timesteps
