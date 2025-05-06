@@ -14,8 +14,8 @@ from packaging import version
 from collections import OrderedDict
 from torch import nn, Tensor
 from torch.jit.annotations import Tuple, List, Dict, Optional
-import numpy as np
-original_input_channels = 1
+
+
 
 class FPN_down_g(nn.Module):
     def __init__(self, in_channel_list, out_channel_list):
@@ -31,9 +31,7 @@ class FPN_down_g(nn.Module):
         for i in range(len(x) - 1):
             current_feature = x[i + 1]
             prev_feature = self.inner_layer[i](prev_feature)
-            # seems like the shape of current_feature would be 1/2 of prev_feature
-            # looks like the shape of each feature align with the shape of its downsampled feature
-            size = (prev_feature.shape[2] // 2, prev_feature.shape[3] // 2, prev_feature.shape[4] // 2)
+            size = (prev_feature.shape[2] // 2, prev_feature.shape[3] // 2)
             prev_feature = F.interpolate(prev_feature, size=size)
             prev_n_current = prev_feature + current_feature
             prev_feature = self.out_layer[i](prev_n_current)
@@ -66,7 +64,7 @@ class FPN_up_g(nn.Module):
         prev_feature = x[0]
         for i in range(self.depth):
             prev_feature = self.inner_layer[i](prev_feature)
-            size = (prev_feature.shape[2] * 2, prev_feature.shape[3] * 2, prev_feature.shape[4] * 2)
+            size = (prev_feature.shape[2] * 2, prev_feature.shape[3] * 2)
             prev_feature = F.interpolate(prev_feature, size=size)
             current_feature = x[i + 1]
             prev_n_current = prev_feature + current_feature
@@ -173,7 +171,6 @@ class FeaturePyramidNetwork(nn.Module):
             feat_shape = inner_lateral.shape[-2:]
             inner_top_down = F.interpolate(last_inner, size=feat_shape, mode="nearest")
             last_inner = inner_lateral + inner_top_down
-            # apply 3x3 conv to smooth and refine the merged feature map
             results.insert(0, self.get_result_from_layer_blocks(last_inner, idx))
 
         if self.extra_blocks is not None:
@@ -1251,7 +1248,7 @@ class SpatialTransformer_(nn.Module):
         inner_dim = n_heads * d_head
         self.norm = Normalize(in_channels)
         if not use_linear:
-            self.proj_in = nn.Conv3d(
+            self.proj_in = nn.Conv2d(
                 in_channels, inner_dim, kernel_size=1, stride=1, padding=0
             )
         else:
@@ -1276,7 +1273,7 @@ class SpatialTransformer_(nn.Module):
         )
         if not use_linear:
             self.proj_out = zero_module(
-                nn.Conv3d(inner_dim, in_channels, kernel_size=1, stride=1, padding=0)
+                nn.Conv2d(inner_dim, in_channels, kernel_size=1, stride=1, padding=0)
             )
         else:
             # self.proj_out = zero_module(nn.Linear(in_channels, inner_dim))
@@ -1287,12 +1284,12 @@ class SpatialTransformer_(nn.Module):
         # note: if no context is given, cross-attention defaults to self-attention
         if not isinstance(context, list):
             context = [context]
-        b, c, d, h, w = x.shape
+        b, c, h, w = x.shape
         x_in = x
         x = self.norm(x)
         if not self.use_linear:
             x = self.proj_in(x)
-        x = rearrange(x, "b c d h w -> b (d h w) c").contiguous()
+        x = rearrange(x, "b c h w -> b (h w) c").contiguous()
         if self.use_linear:
             x = self.proj_in(x)
         for i, block in enumerate(self.transformer_blocks):
@@ -1301,61 +1298,31 @@ class SpatialTransformer_(nn.Module):
             x = block(x, context=context[i])
         if self.use_linear:
             x = self.proj_out(x)
-        x = rearrange(x, "b (d h w) c -> b c d h w", d=d, h=h, w=w).contiguous()
+        x = rearrange(x, "b (h w) c -> b c h w", h=h, w=w).contiguous()
         if not self.use_linear:
             x = self.proj_out(x)
         return x + x_in
 
-# in this context, can use to downsample feature maps
-# class GroupConv(nn.Module):
-#     def __init__(self, in_channels,out_channels, kernel_size, stride=1,padding=0) -> None:
-#         super(GroupConv, self).__init__()
-#         self.conv = nn.Conv2d(3*in_channels, 3*out_channels, kernel_size, stride, padding,groups=3)
-#     def forward(self, data: Tensor, **kwargs) -> Tensor:
-#         # why need to chunk data here?
-#         # because the input data stack 3 planes at the last dimension like (b, c, h, 3 * w)
-#         # but the conv2d we define (with group=3) accept the form like (b, 3 * c, h, w)
-#         data = torch.concat(torch.chunk(data,3,dim=-1),dim=1)
-#         data = self.conv(data)
-#         data = torch.concat(torch.chunk(data,3,dim=1),dim=-1)
-#         return data
-# revised version for 3D data
 class GroupConv(nn.Module):
     def __init__(self, in_channels,out_channels, kernel_size, stride=1,padding=0) -> None:
         super(GroupConv, self).__init__()
-        self.conv = nn.Conv3d(in_channels, out_channels, kernel_size, stride, padding)
+        self.conv = nn.Conv2d(3*in_channels, 3*out_channels, kernel_size, stride, padding,groups=3)
     def forward(self, data: Tensor, **kwargs) -> Tensor:
-        # no need to chunk data because we only have 1 volume
-        # data = torch.concat(torch.chunk(data,3,dim=-1),dim=1)
-        # print("check data shape here", data.shape)
-        # import pdb; pdb.set_trace()
+        data = torch.concat(torch.chunk(data,3,dim=-1),dim=1)
         data = self.conv(data)
-        # data = torch.concat(torch.chunk(data,3,dim=1),dim=-1)
+        data = torch.concat(torch.chunk(data,3,dim=1),dim=-1)
         return data
 
-# in this context, can use to upsample feature maps
-# class GroupConvTranspose(nn.Module):
-#     def __init__(self, in_channels,out_channels, kernel_size, stride=1,padding=0,output_padding=0) -> None:
-#         super(GroupConvTranspose, self).__init__()
-#         self.conv = nn.ConvTranspose2d(3*in_channels, 3*out_channels, kernel_size, stride, padding,output_padding,groups=3)
-#     def forward(self, data: Tensor, **kwargs) -> Tensor:
-#         data = torch.concat(torch.chunk(data,3,dim=-1),dim=1)
-#         data = self.conv(data)
-#         data = torch.concat(torch.chunk(data,3,dim=1),dim=-1)
-#         return data
-# revised version for 3D data
 class GroupConvTranspose(nn.Module):
     def __init__(self, in_channels,out_channels, kernel_size, stride=1,padding=0,output_padding=0) -> None:
         super(GroupConvTranspose, self).__init__()
-        self.conv = nn.ConvTranspose3d(in_channels, out_channels, kernel_size, stride, padding,output_padding)
+        self.conv = nn.ConvTranspose2d(3*in_channels, 3*out_channels, kernel_size, stride, padding,output_padding,groups=3)
     def forward(self, data: Tensor, **kwargs) -> Tensor:
-        # data = torch.concat(torch.chunk(data,3,dim=-1),dim=1)
+        data = torch.concat(torch.chunk(data,3,dim=-1),dim=1)
         data = self.conv(data)
-        # data = torch.concat(torch.chunk(data,3,dim=1),dim=-1)
+        data = torch.concat(torch.chunk(data,3,dim=1),dim=-1)
         return data
 
-# seperate channels into a number of groups and apply normalization on each group
-# useful for small batch size while BatchNorm doesn't do well
 class GroupNorm32(nn.GroupNorm):
     def forward(self, x):
         return super().forward(x.float()).type(x.dtype)
@@ -1380,12 +1347,11 @@ class ResBlock_g(nn.Module):
 
     def __init__(
         self,
-        # number of input channels (dims of feature vector)
         channels,
         dropout,
         out_channels=None,
         use_conv=False,
-        dims=3,
+        dims=2,
         use_checkpoint=False,
         group_layer_num_in=32,
         group_layer_num_out=32,
@@ -1447,10 +1413,8 @@ class VAE(nn.Module):
 
         kl_std = vae_config.get("kl_std", 0.25)
         kl_weight = vae_config.get("kl_weight", 0.001)
-        # original data (tri-plane or volumetric data) dimensions
-        plane_shape = vae_config.get("plane_shape", [1, original_input_channels, 128, 128, 128])
-        # latent space dimensions
-        z_shape = vae_config.get("z_shape", [4, 32, 32, 32])
+        plane_shape = vae_config.get("plane_shape", [3, 32, 256, 256])
+        z_shape = vae_config.get("z_shape", [4, 64, 64])
         num_heads = vae_config.get("num_heads", 16)
         transform_depth = vae_config.get("transform_depth", 1)
 
@@ -1461,34 +1425,24 @@ class VAE(nn.Module):
         self.kl_std = kl_std
         self.kl_weight = kl_weight
 
-        # hidden dims should represent the number of channels (dims of feature vector) in each layer
-        hidden_dims = [128, 128, 256, 256, 256, 256, 256, 2 * self.z_shape[0]]
-        
-        # feature size should be the plane dims of intermediate results
-        # will downsample and upsample across the layers
+        hidden_dims = [512, 512, 1024, 1024, 1024, 1024, 1024, 2 * self.z_shape[0]]
         # feature size:  64,  32,  16,   8,    4,    8,   16,       32
         feature_size = [64, 32, 16, 8, 4, 8, 16, 32]
         #
 
-        hidden_dims_decoder = [256, 256, 256, 256, 256, 128, 128]
+        hidden_dims_decoder = [1024, 1024, 1024, 1024, 1024, 512, 512]
         # feature size:  16,    8,   4,   8,    16,  32,  64
 
         self.in_layer = nn.Sequential(ResBlock_g(
-            # original value is 32, which algins with the number of channels of the input at each pixel
-            plane_shape[1],
+            32,
             dropout=0,
-            # just the number of channels defined for #channels of first hidden layer
-            out_channels=64,
+            out_channels=128,
             use_conv=True,
-            dims=3,
+            dims=2,
             use_checkpoint=False,
-            # maybe because input channels is only 32, so we only need 1 group
             group_layer_num_in=1
-            # but original output channels is 128, so we just use default #groups = 32
-            # in our case which is 64, maybe use smaller #groups is better
         ),
-            # should replace with BatchNorm3D to map 3D CNN
-            nn.BatchNorm3d(64),
+            nn.BatchNorm2d(128),
             nn.SiLU())
 
         #
@@ -1496,7 +1450,7 @@ class VAE(nn.Module):
 
         # Build Encoder
         self.encoders_down = nn.ModuleList()
-        in_channels = 64
+        in_channels = 128
         for i, h_dim in enumerate(hidden_dims[:1]):
             stride = 2
             modules = []
@@ -1504,30 +1458,28 @@ class VAE(nn.Module):
                 nn.Sequential(
                     # nn.Conv2d(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
                     GroupConv(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
-                    nn.BatchNorm3d(h_dim),
+                    nn.BatchNorm2d(h_dim),
                     nn.SiLU(),
                     ResBlock_g(
                         h_dim,
                         dropout=0,
                         out_channels=h_dim,
                         use_conv=True,
-                        dims=3,
+                        dims=2,
                         use_checkpoint=False,
-                        # use default #groups for GroupNorm
                     ),
-                    nn.BatchNorm3d(h_dim),
+                    nn.BatchNorm2d(h_dim),
                     nn.SiLU()),
             )
             in_channels = h_dim
             self.encoders_down.append(nn.Sequential(*modules))
 
-        # reduce one downsample layer, so end up with 4
-        for i, h_dim in enumerate(hidden_dims[1:4]):
+        for i, h_dim in enumerate(hidden_dims[1:5]):
             dim_head = h_dim // num_heads
             self.encoders_down.append(nn.Sequential(
                 # nn.Conv2d(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
                 GroupConv(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
-                nn.BatchNorm3d(h_dim),
+                nn.BatchNorm2d(h_dim),
                 nn.SiLU(),
                 SpatialTransformer_(h_dim,
                                    num_heads,
@@ -1540,20 +1492,17 @@ class VAE(nn.Module):
                                    use_checkpoint=True,
                                    layer=feature_size[i + 1]
                                    ),
-                nn.BatchNorm3d(h_dim),
+                nn.BatchNorm2d(h_dim),
                 nn.SiLU()
             ))
             in_channels = h_dim
 
         # self.encoder_fpn = FPN_down([512, 512, 1024, 1024], [512, 1024, 1024])
-        self.encoder_fpn = FPN_down_g([128, 128, 256, 256], [128, 256, 256])
+        self.encoder_fpn = FPN_down_g([512, 512, 1024, 1024], [512, 1024, 1024])
         self.encoders_up = nn.ModuleList()
-        # reduce one upsample layer, so start from 6
-        for i, h_dim in enumerate(hidden_dims[6:]):
+        for i, h_dim in enumerate(hidden_dims[5:]):
             modules = []
-            # since the first layer would directly be FPN layer, so start from 0
-            if i > 0 or i == 0:
-                # twice the channels because of FPN layer connection
+            if i > 0:
                 in_channels = in_channels * 2
             dim_head = h_dim // num_heads
             modules.append(nn.Sequential(
@@ -1563,24 +1512,20 @@ class VAE(nn.Module):
                                                             stride=2,
                                                             padding=1,
                                                             output_padding=1),
-                                         nn.BatchNorm3d(h_dim),
+                                         nn.BatchNorm2d(h_dim),
                                          nn.SiLU()))
-            # since reducing one layer, so the last layer change to i = 1
-            if i == 1:
+            if i == 2:
                 modules.append(nn.Sequential(ResBlock_g(
                     h_dim,
                     dropout=0,
-                    # 2 for mu and log_var
                     out_channels=2 * z_shape[0],
                     use_conv=True,
-                    dims=3,
+                    dims=2,
                     use_checkpoint=False,
-                    # since we are going to transform to relatively small latent space #channels (z_shape[0]),
-                    # 1 group is enough
                     group_layer_num_in = 1,
                     group_layer_num_out = 1
                 ),
-                    nn.BatchNorm3d(2 * z_shape[0]),
+                    nn.BatchNorm2d(2 * z_shape[0]),
                     nn.SiLU()))
                 in_channels = z_shape[0]
             else:
@@ -1595,13 +1540,13 @@ class VAE(nn.Module):
                                                                 use_checkpoint=True,
                                                                 layer=feature_size[i + 5]
                                                                 ),
-                                             nn.BatchNorm3d(h_dim),
+                                             nn.BatchNorm2d(h_dim),
                                              nn.SiLU()))
                 in_channels = h_dim
             self.encoders_up.append(nn.Sequential(*modules))
 
         ## build decoder
-        hidden_dims_decoder = [256, 256, 256, 256, 256, 128, 128]
+        hidden_dims_decoder = [1024, 1024, 1024, 1024, 1024, 512, 512]
         # feature size:  16,    8,   4,   8,    16,  32,  64
 
         feature_size_decoder = [16, 8, 4, 8, 16, 32, 64]
@@ -1609,25 +1554,24 @@ class VAE(nn.Module):
         self.decoder_in_layer = nn.Sequential(ResBlock_g(
             self.z_shape[0],
             dropout=0,
-            out_channels=128,
+            out_channels=512,
             use_conv=True,
-            dims=3,
+            dims=2,
             use_checkpoint=False,
             group_layer_num_in=1
         ),
-            nn.BatchNorm3d(128),
+            nn.BatchNorm2d(512),
             nn.SiLU())
 
         self.decoders_down = nn.ModuleList()
-        in_channels = 128
-        # reduce one downsample layer, so end up with 2
-        for i, h_dim in enumerate(hidden_dims_decoder[0:2]):
+        in_channels = 512
+        for i, h_dim in enumerate(hidden_dims_decoder[0:3]):
             dim_head = h_dim // num_heads
             stride = 2
             self.decoders_down.append(nn.Sequential(
                 # nn.Conv2d(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
                 GroupConv(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
-                nn.BatchNorm3d(h_dim),
+                nn.BatchNorm2d(h_dim),
                 nn.SiLU(),
                 SpatialTransformer_(h_dim,
                                    num_heads,
@@ -1640,18 +1584,15 @@ class VAE(nn.Module):
                                    use_checkpoint=True,
                                    layer=feature_size_decoder[i]
                                    ),
-                nn.BatchNorm3d(h_dim),
+                nn.BatchNorm2d(h_dim),
                 nn.SiLU()
             ))
             in_channels = h_dim
 
         # self.decoder_fpn = FPN_up([1024, 1024, 1024, 512], [1024, 1024, 512])
-        # reduce one layer for FPN
-        # self.decoder_fpn = FPN_up_g([512, 512, 512, 256], [512, 512, 256])
-        self.decoder_fpn = FPN_up_g([256, 256, 128], [256, 128])
+        self.decoder_fpn = FPN_up_g([1024, 1024, 1024, 512], [1024, 1024, 512])
         self.decoders_up = nn.ModuleList()
-        # reduce one upsample layer, so start from 4
-        for i, h_dim in enumerate(hidden_dims_decoder[4:]):
+        for i, h_dim in enumerate(hidden_dims_decoder[3:]):
             modules = []
             if i > 0 and i < 4:
                 in_channels = in_channels * 2
@@ -1663,10 +1604,9 @@ class VAE(nn.Module):
                                                             stride=2,
                                                             padding=1,
                                                             output_padding=1),
-                                         nn.BatchNorm3d(h_dim),
+                                         nn.BatchNorm2d(h_dim),
                                          nn.SiLU()))
-            # since reducing one layer, so the last layer change to i = 4
-            if i < 3:
+            if i < 4:
                 modules.append(nn.Sequential(SpatialTransformer_(h_dim,
                                                                 num_heads,
                                                                 dim_head,
@@ -1678,7 +1618,7 @@ class VAE(nn.Module):
                                                                 use_checkpoint=True,
                                                                 layer=feature_size_decoder[i + 3]
                                                                 ),
-                                             nn.BatchNorm3d(h_dim),
+                                             nn.BatchNorm2d(h_dim),
                                              nn.SiLU()))
                 in_channels = h_dim
             else:
@@ -1687,10 +1627,10 @@ class VAE(nn.Module):
                     dropout=0,
                     out_channels=h_dim,
                     use_conv=True,
-                    dims=3,
+                    dims=2,
                     use_checkpoint=False,
                 ),
-                    nn.BatchNorm3d(h_dim),
+                    nn.BatchNorm2d(h_dim),
                     nn.SiLU()))
                 in_channels = h_dim
             self.decoders_up.append(nn.Sequential(*modules))
@@ -1702,35 +1642,31 @@ class VAE(nn.Module):
                                stride=2,
                                padding=1,
                                output_padding=1),
-            nn.BatchNorm3d(in_channels),
+            nn.BatchNorm2d(in_channels),
             nn.SiLU(),
             ResBlock_g(
                 in_channels,
                 dropout=0,
                 out_channels=self.plane_shape[1],
                 use_conv=True,
-                dims=3,
+                dims=2,
                 use_checkpoint=False,
-                group_layer_num_out=1,
             ),
-            nn.BatchNorm3d(self.plane_shape[1]),
+            nn.BatchNorm2d(self.plane_shape[1]),
             nn.Tanh()))
 
     def encode(self, enc_input: Tensor) -> List[Tensor]:
         """
         Encodes the input by passing through the encoder network
         and returns the latent codes.
-        :enc_input: (Tensor) Input tensor to encoder [B x D x resolution x resolution] (for tri-plane)
-        # for volumetric data:
-        :enc_input: (Tensor) Input tensor to encoder [B x D x resolution x resolution x resolution]
+        :enc_input: (Tensor) Input tensor to encoder [B x D x resolution x resolution]
         :return: (Tensor) List of latent codes
         """
         result = enc_input
-        # this is originally used to stack each plane's data (at last dimension)
-        # if self.plane_dim == 5:
-        #     result = torch.concat(torch.chunk(result,3,dim=1),dim=-1).squeeze(1)
-        # elif self.plane_dim == 4:
-        #     result = torch.concat(torch.chunk(result,3,dim=1),dim=-1)
+        if self.plane_dim == 5:
+            result = torch.concat(torch.chunk(result,3,dim=1),dim=-1).squeeze(1)
+        elif self.plane_dim == 4:
+            result = torch.concat(torch.chunk(result,3,dim=1),dim=-1)
 
         feature = self.in_layer(result)
         features_down = []
@@ -1743,13 +1679,11 @@ class VAE(nn.Module):
 
         # breakpoint()
 
-        # upsample feature map first, then concat with the corresponding downsampled feature map
-        # since reducing one layer, so only two upsample layers
-        # feature = self.encoders_up[0](feature)
-        feature = torch.cat([feature, features_down[-1]], dim=1)
         feature = self.encoders_up[0](feature)
-        feature = torch.cat([feature, features_down[-2]], dim=1)
+        feature = torch.cat([feature, features_down[-1]], dim=1)
         feature = self.encoders_up[1](feature)
+        feature = torch.cat([feature, features_down[-2]], dim=1)
+        feature = self.encoders_up[2](feature)
 
         encode_channel = self.z_shape[0]
         mu = feature[:, :encode_channel, ...]
@@ -1765,23 +1699,21 @@ class VAE(nn.Module):
             feature_down.append(x)
         feature_down = self.decoder_fpn(feature_down[::-1])
         for i, module in enumerate(self.decoders_up):
-            # since reducing one layer, so end up with 2
-            if i in [1, 2]:
+            if i in [1, 2, 3]:
                 x = torch.cat([x, feature_down[-i]], dim=1)
                 x = module(x)
             else:
                 x = module(x)
-        # this is originally used to recover each plane's data stacked at last dimension back to the original input
-        # if self.plane_dim == 5:
-        #     plane_w = self.plane_shape[-1]
-        #     x = torch.concat([x[..., 0: plane_w].unsqueeze(1),
-        #                       x[..., plane_w: plane_w * 2].unsqueeze(1),
-        #                       x[..., plane_w * 2: plane_w * 3].unsqueeze(1), ], dim=1)
-        # elif self.plane_dim == 4:
-        #     plane_w = self.plane_shape[-1]
-        #     x = torch.concat([x[..., 0: plane_w],
-        #                       x[..., plane_w: plane_w * 2],
-        #                       x[..., plane_w * 2: plane_w * 3], ], dim=1)
+        if self.plane_dim == 5:
+            plane_w = self.plane_shape[-1]
+            x = torch.concat([x[..., 0: plane_w].unsqueeze(1),
+                              x[..., plane_w: plane_w * 2].unsqueeze(1),
+                              x[..., plane_w * 2: plane_w * 3].unsqueeze(1), ], dim=1)
+        elif self.plane_dim == 4:
+            plane_w = self.plane_shape[-1]
+            x = torch.concat([x[..., 0: plane_w],
+                              x[..., plane_w: plane_w * 2],
+                              x[..., plane_w * 2: plane_w * 3], ], dim=1)
         return x
 
     def reparameterize(self, mu: Tensor, logvar: Tensor) -> Tensor:
@@ -1859,86 +1791,23 @@ class VAE(nn.Module):
         z = self.reparameterize(mu, log_var)
         return z
 
-def train_vae(vae_model, raw_data, optimizer, epochs=100):
-
-    val_range = raw_data.max() - raw_data.min()
-    
-    for epoch in range(epochs):
-        vae_model.train()
-        output = vae_model(raw_data)
-        # reconstructed results is the first element of the output (output[0])
-        recon_loss = F.mse_loss(output[0], raw_data)
-        kl_loss = vae_model.module.loss_function(*output)
-        loss = recon_loss + kl_loss
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        print(f"Epoch {epoch}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(val_range / torch.sqrt(recon_loss))):0,.4f}")
-
-    with open("reconstructed_volume.data", "wb") as f:
-        # write the reconstructed volume data to file
-        output[0].clamp(raw_data.min(), raw_data.max()).detach().cpu().numpy().astype(np.float32).tofile(f)
-
 # debug vae
-
-def get_size_of_model(model: nn.Module):
-    print(f"{'Module':40s} | {'Params':>10s} | {'Size (MB)':>10s}")
-    print("-" * 65)
-    total_params = 0
-    for name, module in model.named_modules():
-        if len(list(module.parameters(recurse=False))) == 0:
-            continue  # Skip containers like nn.Sequential without own parameters
-
-        num_params = sum(p.numel() for p in module.parameters(recurse=False))
-        size_mb = num_params * 4 / (1024 ** 2)  # assuming 32-bit float (4 bytes)
-        print(f"{name:40s} | {num_params:10d} | {size_mb:10.4f}")
-        total_params += num_params
-
-    total_size_mb = total_params * 4 / (1024 ** 2)
-    print("-" * 65)
-    print(f"{'Total':40s} | {total_params:10d} | {total_size_mb:10.4f} MB")
 
 if __name__ == "__main__":
     vae_config = {"kl_std": 0.25,
                   "kl_weight": 0.001,
-                  # 3 planes (xy, yz, xz) * 32 channels (feature vectors) * 128x128
-                  "plane_shape": [1, original_input_channels, 128, 128, 128],
-                  "z_shape": [4, 32, 32, 32],
+                  "plane_shape": [3, 32, 128, 128],
+                  "z_shape": [4, 32, 32],
                   "num_heads": 16,
                   "transform_depth": 1}
 
-    vae_model = VAE(vae_config)
-    get_size_of_model(vae_model)
-    vae_model = torch.nn.DataParallel(vae_model)    
-    vae_model = vae_model.cuda()
-    # read raw data
-    raw_data_path = "/media/data/qadwu/volume/vortices/vorts50.data"
-    with open(raw_data_path, "rb") as f:
-        # f.seek(offset * np.dtype(dtype).itemsize)
-        # only read the chunk of the data assigned by the shape
-        volume = np.frombuffer(f.read(128 * 128 * 128 * np.dtype(np.float32).itemsize), dtype=np.float32)
-        # cast volume data into float32
-        volume = volume.astype(np.float32).reshape(1, 1, 128, 128, 128)
-        # normalize the volume data
-        volume = (volume - volume.min()) / (volume.max() - volume.min())
-    input_tensor = torch.tensor(volume).cuda()
-    
-    # # batch_size = 2, plane_shape
-    # input_tensor = torch.randn(2, original_input_channels, 128, 128, 128).cuda()
-    
+    vae_model = VAE(vae_config).cuda()
+
+    input_tensor = torch.randn(2, 3, 32, 128, 128).cuda()
     out = vae_model(input_tensor)
-    loss = vae_model.module.loss_function(*out)
+    loss = vae_model.loss_function(*out)
     print("loss: {}".format(loss))
     print("z shape: {}".format(out[-1].shape))
     print("reconstruct shape: {}".format(out[0].shape))
-    
-    # device_name = "cuda" if torch.cuda.is_available() else "cpu"
-    # device = torch.device(device_name)
-    
-    # test training autoencoder
-    optimizer = torch.optim.Adam(vae_model.parameters(), lr=1e-3)
-    train_vae(vae_model, input_tensor, optimizer, epochs=2000)
-    
-    # samples = vae_model.sample(2)
-    # print("samples shape: {}".format(samples[0].shape))
+    samples = vae_model.sample(2)
+    print("samples shape: {}".format(samples[0].shape))
