@@ -21,6 +21,10 @@ def train_vae(vae_model, train_dataloader, optimizer, epochs=100, tensorboard_wr
     val_range = sample_data.max() - sample_data.min()
     del sample_data
     
+    # Add gradient scaling for mixed precision training
+    # But loss would become NaN, so disable it for now
+    scalar = torch.amp.GradScaler("cuda", enabled=False)
+    
     for epoch in range(epochs):
         running_recon_loss = 0.0
         running_kl_loss = 0.0
@@ -30,14 +34,20 @@ def train_vae(vae_model, train_dataloader, optimizer, epochs=100, tensorboard_wr
         # mini-batch or SGD (with small batch as one sample) training
         # since we do optimization after each batch
         for batch_idx, raw_data in enumerate(train_dataloader):
-            output = vae_model(raw_data)
-            # reconstructed results is the first element of the output (output[0])
-            recon_loss = F.mse_loss(output[0], raw_data)
-            kl_loss = vae_model.module.loss_function(*output)
-            loss = recon_loss + kl_loss
+            # Add gradient scaling for mixed precision training
+            # But loss would become NaN, so disable it for now
+            with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=False):
+                output = vae_model(raw_data)
+                # reconstructed results is the first element of the output (output[0])
+                recon_loss = F.mse_loss(output[0], raw_data)
+                kl_loss = vae_model.module.loss_function(*output)
+                loss = recon_loss + kl_loss
+            scalar.scale(loss).backward()
+            scalar.step(optimizer)
+            scalar.update()
             optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            # loss.backward()
+            # optimizer.step()
             
             running_recon_loss += recon_loss.item() * raw_data.shape[0]
             running_kl_loss += kl_loss.item() * raw_data.shape[0]
