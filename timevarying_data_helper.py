@@ -39,6 +39,67 @@ class TimevaryingDataset(torch.utils.data.Dataset):
     def __len__(self):
         return self.n_timesteps
 
+
+class EncodingWeightDataset(torch.utils.data.Dataset):
+    def __init__(
+        self, pretrained_weights_info, level
+    ):
+        self.pretrained_weights_info = pretrained_weights_info
+        self.n_params = pretrained_weights_info["tree.n_params"].item()
+        base_resolution = pretrained_weights_info["configuration.base_resolution"].item()
+        n_features_per_level = pretrained_weights_info["configuration.n_features_per_level"].item()
+        per_level_scale = pretrained_weights_info["configuration.per_level_scale"].item()
+
+        # quick and dirty way to slice the encoding weights into two levels
+        # TODO: refactor to support all levels
+        if level == 0:
+            self.offset = 0
+            self.length = (base_resolution ** 3) * n_features_per_level
+            self.current_resolution = base_resolution
+        elif level == 1:
+            self.offset = (base_resolution ** 3) * n_features_per_level
+            #TODO: check how original code calculate the length if it's not integer
+            self.length = int((base_resolution * per_level_scale) ** 3) * n_features_per_level
+            self.current_resolution = int(base_resolution * per_level_scale)
+        else:
+            raise ValueError(f"Invalid level {level}. Must be 0 or 1.")
+
+        self.encoding_weights = []
+        for i in range(self.n_params):
+            self.encoding_weights.append(pretrained_weights_info[f"weights{i}"][self.offset:self.offset+self.length].reshape(
+                self.current_resolution, self.current_resolution, self.current_resolution, n_features_per_level))
+
+        self.encoding_weights = torch.stack(self.encoding_weights, dim=0).cuda()
+        # permute the dimensions to match the expected input shape
+        self.encoding_weights = self.encoding_weights.permute(0, 4, 1, 2, 3)
+        
+    def __getitem__(self, index):
+        if index >= self.n_params:
+            # need to raise IndexError to avoid infinite loop
+            # when directly enumerating the dataset instead of using DataLoader
+            raise IndexError(f"Index {index} out of bounds (n_params={self.n_params})")
+        return self.encoding_weights[index]
+
+    def __len__(self):
+        return self.n_params
+    
+    # since we already specify level in the constructor
+    # we don't need to specify level here
+    def replace_level_n_weights(self, new_weights):
+        results = []
+        total_loss = 0.0
+        for i in range(self.n_params):
+            # replace the encoding weights with the new weights
+            running_loss = torch.nn.functional.mse_loss(new_weights[i].permute(1, 2, 3, 0).flatten(), self.pretrained_weights_info[f'weights{i}'][self.offset:self.offset+self.length])
+            print(f"{i}: loss {running_loss}")
+            total_loss += running_loss
+            self.pretrained_weights_info[f"weights{i}"][self.offset:self.offset+self.length] = new_weights[i].permute(1, 2, 3, 0).flatten()
+            results.append(self.pretrained_weights_info[f"weights{i}"])
+        results = torch.stack(results, dim=0)
+        print("total loss", total_loss)
+        return results
+
+
 if __name__ == "__main__":
     dataset = TimevaryingDataset(
         raw_data_prefix="/media/data/qadwu/volume/vortices",
@@ -47,6 +108,13 @@ if __name__ == "__main__":
         res=[128, 128, 128],
         n_timesteps=90,
         n_channels=1
+    )
+    print("dataset length: ", len(dataset))
+    print("dataset shape: ", dataset[0].shape)
+    
+    pretrained_weights = torch.load("/home/kctung/Projects/instant-vnr-pytorch/logs/hyperinr/debug/run00028/checkpoint-last.ckpt")
+    dataset = EncodingWeightDataset(
+        pretrained_weights_info=pretrained_weights["model_state_dict"], level=1
     )
     print("dataset length: ", len(dataset))
     print("dataset shape: ", dataset[0].shape)
