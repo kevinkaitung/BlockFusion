@@ -1442,8 +1442,11 @@ class ResBlock_g(nn.Module):
 
 
 class VAE(nn.Module):
-    def __init__(self, vae_config) -> None:
+    def __init__(self, vae_config, use_native_init=True) -> None:
         super(VAE, self).__init__()
+        if use_native_init == False:
+            self.my_init(vae_config)
+            return
 
         kl_std = vae_config.get("kl_std", 0.25)
         kl_weight = vae_config.get("kl_weight", 0.001)
@@ -1593,6 +1596,7 @@ class VAE(nn.Module):
                                                                 use_linear=True,
                                                                 attn_type="linear",
                                                                 use_checkpoint=True,
+                                                                #TODO: should be i + 6? (but seems harmless if passing wrong value)
                                                                 layer=feature_size[i + 5]
                                                                 ),
                                              nn.BatchNorm3d(h_dim),
@@ -1676,11 +1680,14 @@ class VAE(nn.Module):
                                                                 use_linear=True,
                                                                 attn_type="linear",
                                                                 use_checkpoint=True,
+                                                                #TODO: should be i + 4?
                                                                 layer=feature_size_decoder[i + 3]
                                                                 ),
                                              nn.BatchNorm3d(h_dim),
                                              nn.SiLU()))
                 in_channels = h_dim
+            # TODO: seems this section is not used
+            # directly jump to last block which has resblock
             else:
                 modules.append(nn.Sequential(ResBlock_g(
                     h_dim,
@@ -1715,6 +1722,192 @@ class VAE(nn.Module):
             ),
             nn.BatchNorm3d(self.plane_shape[1]),
             nn.Tanh()))
+    
+    def my_init(self, vae_config) -> None:
+
+        kl_std = vae_config.get("kl_std", 0.25)
+        kl_weight = vae_config.get("kl_weight", 0.001)
+        # original data (tri-plane or volumetric data) dimensions
+        plane_shape = vae_config.get("plane_shape", [1, original_input_channels, 128, 128, 128])
+        # latent space dimensions
+        z_shape = vae_config.get("z_shape", [4, 32, 32, 32])
+        num_heads = vae_config.get("num_heads", 16)
+        transform_depth = vae_config.get("transform_depth", 1)
+
+        self.plane_dim = len(plane_shape) + 1
+        self.plane_shape = plane_shape
+        self.z_shape = z_shape
+
+        self.kl_std = kl_std
+        self.kl_weight = kl_weight
+
+        self.num_heads = num_heads
+        self.transform_depth = transform_depth
+        
+        encoder_in_channels = 64
+        hidden_dims = [128, 128, 256, 256, 256, 256, 256, 2 * self.z_shape[0]]
+        feature_size = [64, 32, 16, 8, 4, 8, 16, 32]
+        
+        decoder_in_channels = 128
+        hidden_dims_decoder = [256, 256, 256, 256, 256, 128, 128]
+        feature_size_decoder = [16, 8, 4, 8, 16, 32, 64]
+        
+        block_config = {
+            "encoders_down": [
+                             {"in_channels":encoder_in_channels, "inter_channels":hidden_dims[0], 
+                              "out_channels":hidden_dims[0], "feature_size":feature_size[0], 
+                              "use_transformer":False, "use_resblock":True, "is_decoder_output": False},
+                             {"in_channels":hidden_dims[0], "inter_channels":hidden_dims[1], 
+                              "out_channels":hidden_dims[1], "feature_size":feature_size[1], 
+                              "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
+                             {"in_channels":hidden_dims[1], "inter_channels":hidden_dims[2], 
+                              "out_channels":hidden_dims[2], "feature_size":feature_size[2], 
+                              "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
+                             {"in_channels":hidden_dims[2], "inter_channels":hidden_dims[3], 
+                              "out_channels":hidden_dims[3], "feature_size":feature_size[3], 
+                              "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
+                            ],
+            "encoders_up": [
+                            # twice wider of input channels for FPN layer input
+                            {"in_channels":hidden_dims[3]*2, "inter_channels":hidden_dims[6], 
+                              "out_channels":hidden_dims[6], "feature_size":feature_size[6], 
+                              "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
+                             {"in_channels":hidden_dims[6]*2, "inter_channels":hidden_dims[7], 
+                              "out_channels":2 * z_shape[0], "feature_size":feature_size[7], 
+                              "use_transformer":False, "use_resblock":True, "is_decoder_output": False}
+                          ],
+            "decoders_down": [
+                            {"in_channels":decoder_in_channels, "inter_channels":hidden_dims_decoder[0], 
+                              "out_channels":hidden_dims_decoder[0], "feature_size":feature_size_decoder[0], 
+                              "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
+                             {"in_channels":hidden_dims_decoder[0], "inter_channels":hidden_dims_decoder[1], 
+                              "out_channels":hidden_dims_decoder[1], "feature_size":feature_size_decoder[1], 
+                              "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
+                            ],
+            "decoders_up": [
+                            {"in_channels":hidden_dims_decoder[1], "inter_channels":hidden_dims_decoder[4], 
+                              "out_channels":hidden_dims_decoder[4], "feature_size":feature_size_decoder[4], 
+                              "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
+                            # twice wider of input channels for FPN layer input
+                             {"in_channels":hidden_dims_decoder[4]*2, "inter_channels":hidden_dims_decoder[5], 
+                              "out_channels":hidden_dims_decoder[5], "feature_size":feature_size_decoder[5], 
+                              "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
+                             {"in_channels":hidden_dims_decoder[5]*2, "inter_channels":hidden_dims_decoder[6], 
+                              "out_channels":hidden_dims_decoder[6], "feature_size":feature_size_decoder[6], 
+                              "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
+                             {"in_channels":hidden_dims_decoder[6], "inter_channels":hidden_dims_decoder[6], 
+                              "out_channels":self.plane_shape[1], "feature_size":self.plane_shape[2], 
+                              "use_transformer":False, "use_resblock":True, "is_decoder_output": True},
+                          ],
+        }
+
+        self.in_layer = nn.Sequential(ResBlock_g(
+            plane_shape[1],
+            dropout=0,
+            out_channels=encoder_in_channels,
+            use_conv=True,
+            dims=3,
+            use_checkpoint=False,
+            # maybe because input channels is only 32, so we only need 1 group
+            group_layer_num_in=1
+            # but original output channels is 128, so we just use default #groups = 32
+            # in our case which is 64, maybe use smaller #groups is better
+        ),
+            nn.BatchNorm3d(encoder_in_channels),
+            nn.SiLU())
+        
+        self.encoders_down = nn.ModuleList()
+        for config in block_config["encoders_down"]:
+            self.encoders_down.append(self.make_block(downsample=True, **config))
+        
+        # specify the which encoder layer as FPN layer
+        self.encoder_fpn = FPN_down_g([hidden_dims[i] for i in [0, 1, 2, 3]], [hidden_dims[i] for i in [1, 2, 3]])
+        self.encoders_up = nn.ModuleList()
+        for config in block_config["encoders_up"]:
+            self.encoders_up.append(self.make_block(downsample=False, **config))
+        
+        
+        self.decoder_in_layer = nn.Sequential(ResBlock_g(
+            self.z_shape[0],
+            dropout=0,
+            out_channels=decoder_in_channels,
+            use_conv=True,
+            dims=3,
+            use_checkpoint=False,
+            group_layer_num_in=1
+        ),
+            nn.BatchNorm3d(decoder_in_channels),
+            nn.SiLU())
+        
+        self.decoders_down = nn.ModuleList()
+        for config in block_config["decoders_down"]:
+            self.decoders_down.append(self.make_block(downsample=True, **config))
+        
+        self.decoder_fpn = FPN_up_g([hidden_dims_decoder[1], hidden_dims_decoder[0], decoder_in_channels], [256, 128]) #hidden_dims_decoder[5,4]?
+        self.decoders_up = nn.ModuleList()
+        for config in block_config["decoders_up"]:
+            self.decoders_up.append(self.make_block(downsample=False, **config))
+
+
+    def make_block(self, downsample, in_channels, inter_channels, out_channels, feature_size,
+                   use_transformer=False, use_resblock=True, is_decoder_output=False):
+        layers = []
+        if downsample:
+            conv = GroupConv(in_channels, inter_channels, kernel_size=3, stride=2, padding=1)
+        else:
+            conv = GroupConvTranspose(in_channels, inter_channels, kernel_size=3, stride=2, padding=1, output_padding=1)
+        layers.extend([conv, nn.BatchNorm3d(inter_channels), nn.SiLU()])
+        
+        if use_transformer:
+            dim_head = inter_channels // self.num_heads
+            transformer = SpatialTransformer_(inter_channels,
+                                            self.num_heads,
+                                            dim_head,
+                                            depth=self.transform_depth,
+                                            context_dim=inter_channels,
+                                            disable_self_attn=False,
+                                            use_linear=True,
+                                            attn_type="linear",
+                                            use_checkpoint=True,
+                                            layer=feature_size
+                                            )
+            layers.extend([transformer, nn.BatchNorm3d(inter_channels), nn.SiLU()])
+        
+        #TODO: check whether the num_groups specified here is reasonable or not
+        if inter_channels > 64:
+            in_num_groups = 32
+        elif inter_channels >= 32:
+            # Note: seems 4 channels in a group is common
+            # but need to think about whether grouping hashencoding weights into separate group is reasonable
+            # maybe more reasonable to calculate all hashencoding wieghts in a group?
+            in_num_groups = inter_channels // 4
+        else:
+            in_num_groups = 1
+        
+        if out_channels > 64:
+            out_num_groups = 32
+        elif out_channels >= 32:
+            out_num_groups = out_channels // 4
+        else:
+            out_num_groups = 1
+        
+        if use_resblock:
+            resblock = ResBlock_g(inter_channels,
+                                dropout=0,
+                                out_channels=out_channels,
+                                use_conv=True,
+                                dims=3,
+                                use_checkpoint=False,
+                                group_layer_num_in=in_num_groups,
+                                group_layer_num_out=out_num_groups
+                                )
+        
+            if is_decoder_output:
+                layers.extend([resblock, nn.BatchNorm3d(out_channels), nn.Tanh()])
+            else:
+                layers.extend([resblock, nn.BatchNorm3d(out_channels), nn.SiLU()])
+        
+        return nn.Sequential(*layers)
 
     def encode(self, enc_input: Tensor) -> List[Tensor]:
         """
@@ -2330,9 +2523,14 @@ if __name__ == "__main__":
                   "transform_depth": 1}
 
     vae_model = VAE(vae_config)
-    get_size_of_model(vae_model)
+    # get_size_of_model(vae_model)
     vae_model = torch.nn.DataParallel(vae_model)    
     vae_model = vae_model.cuda()
+
+    vae_model_refac = VAE(vae_config, False)
+    vae_model_refac = torch.nn.DataParallel(vae_model_refac)
+    vae_model_refac = vae_model_refac.cuda()
+
     # read raw data
     raw_data_path = "/media/data/qadwu/volume/vortices/vorts50.data"
     with open(raw_data_path, "rb") as f:
@@ -2354,12 +2552,19 @@ if __name__ == "__main__":
     print("z shape: {}".format(out[-1].shape))
     print("reconstruct shape: {}".format(out[0].shape))
     
+    # just see whether preliminary results generated by refactored version of VAE is reasonable
+    out_refac = vae_model_refac(input_tensor)
+    loss_refac = vae_model_refac.module.loss_function(*out_refac)
+    print("loss: {}".format(loss_refac))
+    print("z shape: {}".format(out_refac[-1].shape))
+    print("reconstruct shape: {}".format(out_refac[0].shape))
+    
     # device_name = "cuda" if torch.cuda.is_available() else "cpu"
     # device = torch.device(device_name)
     
     # test training autoencoder
-    optimizer = torch.optim.Adam(vae_model.parameters(), lr=1e-3)
-    train_vae(vae_model, input_tensor, optimizer, epochs=2000)
+    optimizer = torch.optim.Adam(vae_model_refac.parameters(), lr=1e-3)
+    train_vae(vae_model_refac, input_tensor, optimizer, epochs=2000)
     
     # samples = vae_model.sample(2)
     # print("samples shape: {}".format(samples[0].shape))
