@@ -1744,58 +1744,70 @@ class VAE(nn.Module):
         self.num_heads = num_heads
         self.transform_depth = transform_depth
         
-        encoder_in_channels = 64
-        hidden_dims = [128, 128, 256, 256, 256, 256, 256, 2 * self.z_shape[0]]
-        feature_size = [64, 32, 16, 8, 4, 8, 16, 32]
+        # encoder_in_channels = 64
         
-        decoder_in_channels = 128
-        hidden_dims_decoder = [256, 256, 256, 256, 256, 128, 128]
-        feature_size_decoder = [16, 8, 4, 8, 16, 32, 64]
+        #           idx:0,   1,   2,   3,   4,  (5,   6,)  7,     8
+        encoder_dims = [64, 128, 128, 256, 256, 256, 256, 256, 2 * self.z_shape[0]]
+        feature_size = [128, 64,  32,  16,  8,   4,    8,  16,   32]
+        
+        # decoder_in_channels = 128
+        decoder_dims = [128, 256, 256, 256, 256, 256, 128, 128]
+        feature_size_decoder = [32, 16, 8, 4, 8, 16, 32, 64]
+        
+        # these indices index for encoder_dims/decoder_dims
+        fpn_encoders_layer_dim_idx = [2, 3, 4]
+        fpn_decoders_layer_dim_idx = [0, 1, 2]
+        
+        # these indices index for the group of blocks (i.e., encoders_down, ...) in block_config
+        self.fpn_encoders_down_idx = [1, 2, 3]
+        self.fpn_encoders_up_idx = [0, 1]
+        self.fpn_decoders_down_idx = [-1, 0, 1]
+        self.fpn_decoders_up_idx = [1, 2]
         
         block_config = {
             "encoders_down": [
-                             {"in_channels":encoder_in_channels, "inter_channels":hidden_dims[0], 
-                              "out_channels":hidden_dims[0], "feature_size":feature_size[0], 
+                             {"in_channels":encoder_dims[0], "inter_channels":encoder_dims[1], 
+                              "out_channels":encoder_dims[1], "feature_size":feature_size[1], 
                               "use_transformer":False, "use_resblock":True, "is_decoder_output": False},
-                             {"in_channels":hidden_dims[0], "inter_channels":hidden_dims[1], 
-                              "out_channels":hidden_dims[1], "feature_size":feature_size[1], 
+                             {"in_channels":encoder_dims[1], "inter_channels":encoder_dims[2], 
+                              "out_channels":encoder_dims[2], "feature_size":feature_size[2], 
                               "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                             {"in_channels":hidden_dims[1], "inter_channels":hidden_dims[2], 
-                              "out_channels":hidden_dims[2], "feature_size":feature_size[2], 
+                             {"in_channels":encoder_dims[2], "inter_channels":encoder_dims[3], 
+                              "out_channels":encoder_dims[3], "feature_size":feature_size[3], 
                               "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                             {"in_channels":hidden_dims[2], "inter_channels":hidden_dims[3], 
-                              "out_channels":hidden_dims[3], "feature_size":feature_size[3], 
+                             {"in_channels":encoder_dims[3], "inter_channels":encoder_dims[4], 
+                              "out_channels":encoder_dims[4], "feature_size":feature_size[4], 
                               "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
                             ],
             "encoders_up": [
                             # twice wider of input channels for FPN layer input
-                            {"in_channels":hidden_dims[3]*2, "inter_channels":hidden_dims[6], 
-                              "out_channels":hidden_dims[6], "feature_size":feature_size[6], 
+                            {"in_channels":encoder_dims[4]*2, "inter_channels":encoder_dims[7], 
+                              "out_channels":encoder_dims[7], "feature_size":feature_size[7], 
                               "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                             {"in_channels":hidden_dims[6]*2, "inter_channels":hidden_dims[7], 
-                              "out_channels":2 * z_shape[0], "feature_size":feature_size[7], 
+                             {"in_channels":encoder_dims[7]*2, "inter_channels":encoder_dims[8], 
+                              "out_channels":2 * z_shape[0], "feature_size":feature_size[8], 
                               "use_transformer":False, "use_resblock":True, "is_decoder_output": False}
                           ],
             "decoders_down": [
-                            {"in_channels":decoder_in_channels, "inter_channels":hidden_dims_decoder[0], 
-                              "out_channels":hidden_dims_decoder[0], "feature_size":feature_size_decoder[0], 
+                            {"in_channels":decoder_dims[0], "inter_channels":decoder_dims[1], 
+                              "out_channels":decoder_dims[1], "feature_size":feature_size_decoder[1], 
                               "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                             {"in_channels":hidden_dims_decoder[0], "inter_channels":hidden_dims_decoder[1], 
-                              "out_channels":hidden_dims_decoder[1], "feature_size":feature_size_decoder[1], 
+                             {"in_channels":decoder_dims[1], "inter_channels":decoder_dims[2], 
+                              "out_channels":decoder_dims[2], "feature_size":feature_size_decoder[2], 
                               "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
                             ],
             "decoders_up": [
-                            {"in_channels":hidden_dims_decoder[1], "inter_channels":hidden_dims_decoder[4], 
-                              "out_channels":hidden_dims_decoder[4], "feature_size":feature_size_decoder[4], 
+                            {"in_channels":decoder_dims[2], "inter_channels":decoder_dims[5], 
+                              "out_channels":decoder_dims[5], "feature_size":feature_size_decoder[5], 
                               "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
                             # twice wider of input channels for FPN layer input
-                             {"in_channels":hidden_dims_decoder[4]*2, "inter_channels":hidden_dims_decoder[5], 
-                              "out_channels":hidden_dims_decoder[5], "feature_size":feature_size_decoder[5], 
+                             {"in_channels":decoder_dims[5]*2, "inter_channels":decoder_dims[6], 
+                              "out_channels":decoder_dims[6], "feature_size":feature_size_decoder[6], 
                               "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                             {"in_channels":hidden_dims_decoder[5]*2, "inter_channels":hidden_dims_decoder[6], 
-                              "out_channels":hidden_dims_decoder[6], "feature_size":feature_size_decoder[6], 
+                             {"in_channels":decoder_dims[6]*2, "inter_channels":decoder_dims[7], 
+                              "out_channels":decoder_dims[7], "feature_size":feature_size_decoder[7], 
                               "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                             {"in_channels":hidden_dims_decoder[6], "inter_channels":hidden_dims_decoder[6], 
+                             {"in_channels":decoder_dims[7], "inter_channels":decoder_dims[7], 
                               "out_channels":self.plane_shape[1], "feature_size":self.plane_shape[2], 
                               "use_transformer":False, "use_resblock":True, "is_decoder_output": True},
                           ],
@@ -1804,7 +1816,7 @@ class VAE(nn.Module):
         self.in_layer = nn.Sequential(ResBlock_g(
             plane_shape[1],
             dropout=0,
-            out_channels=encoder_in_channels,
+            out_channels=encoder_dims[0],
             use_conv=True,
             dims=3,
             use_checkpoint=False,
@@ -1813,7 +1825,7 @@ class VAE(nn.Module):
             # but original output channels is 128, so we just use default #groups = 32
             # in our case which is 64, maybe use smaller #groups is better
         ),
-            nn.BatchNorm3d(encoder_in_channels),
+            nn.BatchNorm3d(encoder_dims[0]),
             nn.SiLU())
         
         self.encoders_down = nn.ModuleList()
@@ -1821,7 +1833,9 @@ class VAE(nn.Module):
             self.encoders_down.append(self.make_block(downsample=True, **config))
         
         # specify the which encoder layer as FPN layer
-        self.encoder_fpn = FPN_down_g([hidden_dims[i] for i in [0, 1, 2, 3]], [hidden_dims[i] for i in [1, 2, 3]])
+        self.encoder_fpn = FPN_down_g([encoder_dims[i] for i in fpn_encoders_layer_dim_idx], [encoder_dims[i] for i in fpn_encoders_layer_dim_idx[1:]])
+        # self.encoder_fpn = FPN_down_g([128, 128, 256, 256], [128, 256, 256])
+        
         self.encoders_up = nn.ModuleList()
         for config in block_config["encoders_up"]:
             self.encoders_up.append(self.make_block(downsample=False, **config))
@@ -1830,20 +1844,22 @@ class VAE(nn.Module):
         self.decoder_in_layer = nn.Sequential(ResBlock_g(
             self.z_shape[0],
             dropout=0,
-            out_channels=decoder_in_channels,
+            out_channels=decoder_dims[0],
             use_conv=True,
             dims=3,
             use_checkpoint=False,
             group_layer_num_in=1
         ),
-            nn.BatchNorm3d(decoder_in_channels),
+            nn.BatchNorm3d(decoder_dims[0]),
             nn.SiLU())
         
         self.decoders_down = nn.ModuleList()
         for config in block_config["decoders_down"]:
             self.decoders_down.append(self.make_block(downsample=True, **config))
         
-        self.decoder_fpn = FPN_up_g([hidden_dims_decoder[1], hidden_dims_decoder[0], decoder_in_channels], [256, 128]) #hidden_dims_decoder[5,4]?
+        self.decoder_fpn = FPN_up_g([decoder_dims[i] for i in fpn_decoders_layer_dim_idx[::-1]], [decoder_dims[i] for i in fpn_decoders_layer_dim_idx[::-1][1:]]) #hidden_dims_decoder[5,4]?
+        # self.decoder_fpn = FPN_up_g([256, 256, 128], [256, 128])
+        
         self.decoders_up = nn.ModuleList()
         for config in block_config["decoders_up"]:
             self.decoders_up.append(self.make_block(downsample=False, **config))
@@ -1929,20 +1945,21 @@ class VAE(nn.Module):
         features_down = []
         for i, module in enumerate(self.encoders_down):
             feature = module(feature)
-            if i in [0, 1, 2, 3]:
+            if i in self.fpn_encoders_down_idx:
                 features_down.append(feature)
 
-        features_down = self.encoder_fpn(features_down)
+        if features_down:
+            features_down = self.encoder_fpn(features_down)
 
         # breakpoint()
 
-        # upsample feature map first, then concat with the corresponding downsampled feature map
-        # since reducing one layer, so only two upsample layers
-        # feature = self.encoders_up[0](feature)
-        feature = torch.cat([feature, features_down[-1]], dim=1)
-        feature = self.encoders_up[0](feature)
-        feature = torch.cat([feature, features_down[-2]], dim=1)
-        feature = self.encoders_up[1](feature)
+        features_down = features_down[::-1]
+        features_down_idx = 0
+        for i, module in enumerate(self.encoders_up):
+            if i in self.fpn_encoders_up_idx:
+                feature = torch.cat([feature, features_down[features_down_idx]], dim=1)
+                features_down_idx += 1
+            feature = module(feature)
 
         encode_channel = self.z_shape[0]
         mu = feature[:, :encode_channel, ...]
@@ -1952,15 +1969,22 @@ class VAE(nn.Module):
 
     def decode(self, z: Tensor) -> Tensor:
         x = self.decoder_in_layer(z)
-        feature_down = [x]
+        # use -1 to denote decoder_in_layer as FPN layer
+        if -1 in self.fpn_decoders_down_idx:
+            feature_down = [x]
+        else:
+            feature_down = []
         for i, module in enumerate(self.decoders_down):
             x = module(x)
-            feature_down.append(x)
-        feature_down = self.decoder_fpn(feature_down[::-1])
+            if i in self.fpn_decoders_down_idx:
+                feature_down.append(x)
+        if feature_down:
+            feature_down = self.decoder_fpn(feature_down[::-1])
+        features_down_idx = 1
         for i, module in enumerate(self.decoders_up):
-            # since reducing one layer, so end up with 2
-            if i in [1, 2]:
-                x = torch.cat([x, feature_down[-i]], dim=1)
+            if i in self.fpn_decoders_up_idx:
+                x = torch.cat([x, feature_down[-features_down_idx]], dim=1)
+                features_down_idx += 1
                 x = module(x)
             else:
                 x = module(x)
@@ -2522,10 +2546,10 @@ if __name__ == "__main__":
                   "num_heads": 16,
                   "transform_depth": 1}
 
-    vae_model = VAE(vae_config)
-    # get_size_of_model(vae_model)
-    vae_model = torch.nn.DataParallel(vae_model)    
-    vae_model = vae_model.cuda()
+    # vae_model = VAE(vae_config)
+    # # get_size_of_model(vae_model)
+    # vae_model = torch.nn.DataParallel(vae_model)    
+    # vae_model = vae_model.cuda()
 
     vae_model_refac = VAE(vae_config, False)
     vae_model_refac = torch.nn.DataParallel(vae_model_refac)
@@ -2546,11 +2570,11 @@ if __name__ == "__main__":
     # # batch_size = 2, plane_shape
     # input_tensor = torch.randn(2, original_input_channels, 128, 128, 128).cuda()
     
-    out = vae_model(input_tensor)
-    loss = vae_model.module.loss_function(*out)
-    print("loss: {}".format(loss))
-    print("z shape: {}".format(out[-1].shape))
-    print("reconstruct shape: {}".format(out[0].shape))
+    # out = vae_model(input_tensor)
+    # loss = vae_model.module.loss_function(*out)
+    # print("loss: {}".format(loss))
+    # print("z shape: {}".format(out[-1].shape))
+    # print("reconstruct shape: {}".format(out[0].shape))
     
     # just see whether preliminary results generated by refactored version of VAE is reasonable
     out_refac = vae_model_refac(input_tensor)
