@@ -1442,288 +1442,8 @@ class ResBlock_g(nn.Module):
 
 
 class VAE(nn.Module):
-    def __init__(self, vae_config, use_native_init=True) -> None:
+    def __init__(self, vae_config) -> None:
         super(VAE, self).__init__()
-        if use_native_init == False:
-            self.my_init(vae_config)
-            return
-
-        kl_std = vae_config.get("kl_std", 0.25)
-        kl_weight = vae_config.get("kl_weight", 0.001)
-        # original data (tri-plane or volumetric data) dimensions
-        plane_shape = vae_config.get("plane_shape", [1, original_input_channels, 128, 128, 128])
-        # latent space dimensions
-        z_shape = vae_config.get("z_shape", [4, 32, 32, 32])
-        num_heads = vae_config.get("num_heads", 16)
-        transform_depth = vae_config.get("transform_depth", 1)
-
-        self.plane_dim = len(plane_shape) + 1
-        self.plane_shape = plane_shape
-        self.z_shape = z_shape
-
-        self.kl_std = kl_std
-        self.kl_weight = kl_weight
-
-        # hidden dims should represent the number of channels (dims of feature vector) in each layer
-        hidden_dims = [128, 128, 256, 256, 256, 256, 256, 2 * self.z_shape[0]]
-        
-        # feature size should be the plane dims of intermediate results
-        # will downsample and upsample across the layers
-        # feature size:  64,  32,  16,   8,    4,    8,   16,       32
-        feature_size = [64, 32, 16, 8, 4, 8, 16, 32]
-        #
-
-        hidden_dims_decoder = [256, 256, 256, 256, 256, 128, 128]
-        # feature size:  16,    8,   4,   8,    16,  32,  64
-
-        self.in_layer = nn.Sequential(ResBlock_g(
-            # original value is 32, which algins with the number of channels of the input at each pixel
-            plane_shape[1],
-            dropout=0,
-            # just the number of channels defined for #channels of first hidden layer
-            out_channels=64,
-            use_conv=True,
-            dims=3,
-            use_checkpoint=False,
-            # maybe because input channels is only 32, so we only need 1 group
-            group_layer_num_in=1
-            # but original output channels is 128, so we just use default #groups = 32
-            # in our case which is 64, maybe use smaller #groups is better
-        ),
-            # should replace with BatchNorm3D to map 3D CNN
-            nn.BatchNorm3d(64),
-            nn.SiLU())
-
-        #
-        # self.spatial_modulation = nn.Linear(128*3, 128*3)
-
-        # Build Encoder
-        self.encoders_down = nn.ModuleList()
-        in_channels = 64
-        for i, h_dim in enumerate(hidden_dims[:1]):
-            stride = 2
-            modules = []
-            modules.append(
-                nn.Sequential(
-                    # nn.Conv2d(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
-                    GroupConv(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
-                    nn.BatchNorm3d(h_dim),
-                    nn.SiLU(),
-                    ResBlock_g(
-                        h_dim,
-                        dropout=0,
-                        out_channels=h_dim,
-                        use_conv=True,
-                        dims=3,
-                        use_checkpoint=False,
-                        # use default #groups for GroupNorm
-                    ),
-                    nn.BatchNorm3d(h_dim),
-                    nn.SiLU()),
-            )
-            in_channels = h_dim
-            self.encoders_down.append(nn.Sequential(*modules))
-
-        # reduce one downsample layer, so end up with 4
-        for i, h_dim in enumerate(hidden_dims[1:4]):
-            dim_head = h_dim // num_heads
-            self.encoders_down.append(nn.Sequential(
-                # nn.Conv2d(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
-                GroupConv(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
-                nn.BatchNorm3d(h_dim),
-                nn.SiLU(),
-                SpatialTransformer_(h_dim,
-                                   num_heads,
-                                   dim_head,
-                                   depth=transform_depth,
-                                   context_dim=h_dim,
-                                   disable_self_attn=False,
-                                   use_linear=True,
-                                   attn_type="linear",
-                                   use_checkpoint=True,
-                                   layer=feature_size[i + 1]
-                                   ),
-                nn.BatchNorm3d(h_dim),
-                nn.SiLU()
-            ))
-            in_channels = h_dim
-
-        # self.encoder_fpn = FPN_down([512, 512, 1024, 1024], [512, 1024, 1024])
-        self.encoder_fpn = FPN_down_g([128, 128, 256, 256], [128, 256, 256])
-        self.encoders_up = nn.ModuleList()
-        # reduce one upsample layer, so start from 6
-        for i, h_dim in enumerate(hidden_dims[6:]):
-            modules = []
-            # since the first layer would directly be FPN layer, so start from 0
-            if i > 0 or i == 0:
-                # twice the channels because of FPN layer connection
-                in_channels = in_channels * 2
-            dim_head = h_dim // num_heads
-            modules.append(nn.Sequential(
-                                         GroupConvTranspose(in_channels,
-                                                            h_dim,
-                                                            kernel_size=3,
-                                                            stride=2,
-                                                            padding=1,
-                                                            output_padding=1),
-                                         nn.BatchNorm3d(h_dim),
-                                         nn.SiLU()))
-            # since reducing one layer, so the last layer change to i = 1
-            if i == 1:
-                modules.append(nn.Sequential(ResBlock_g(
-                    h_dim,
-                    dropout=0,
-                    # 2 for mu and log_var
-                    out_channels=2 * z_shape[0],
-                    use_conv=True,
-                    dims=3,
-                    use_checkpoint=False,
-                    # since we are going to transform to relatively small latent space #channels (z_shape[0]),
-                    # 1 group is enough
-                    group_layer_num_in = 1,
-                    group_layer_num_out = 1
-                ),
-                    nn.BatchNorm3d(2 * z_shape[0]),
-                    nn.SiLU()))
-                in_channels = z_shape[0]
-            else:
-                modules.append(nn.Sequential(SpatialTransformer_(h_dim,
-                                                                num_heads,
-                                                                dim_head,
-                                                                depth=transform_depth,
-                                                                context_dim=h_dim,
-                                                                disable_self_attn=False,
-                                                                use_linear=True,
-                                                                attn_type="linear",
-                                                                use_checkpoint=True,
-                                                                #TODO: should be i + 6? (but seems harmless if passing wrong value)
-                                                                layer=feature_size[i + 5]
-                                                                ),
-                                             nn.BatchNorm3d(h_dim),
-                                             nn.SiLU()))
-                in_channels = h_dim
-            self.encoders_up.append(nn.Sequential(*modules))
-
-        ## build decoder
-        hidden_dims_decoder = [256, 256, 256, 256, 256, 128, 128]
-        # feature size:  16,    8,   4,   8,    16,  32,  64
-
-        feature_size_decoder = [16, 8, 4, 8, 16, 32, 64]
-
-        self.decoder_in_layer = nn.Sequential(ResBlock_g(
-            self.z_shape[0],
-            dropout=0,
-            out_channels=128,
-            use_conv=True,
-            dims=3,
-            use_checkpoint=False,
-            group_layer_num_in=1
-        ),
-            nn.BatchNorm3d(128),
-            nn.SiLU())
-
-        self.decoders_down = nn.ModuleList()
-        in_channels = 128
-        # reduce one downsample layer, so end up with 2
-        for i, h_dim in enumerate(hidden_dims_decoder[0:2]):
-            dim_head = h_dim // num_heads
-            stride = 2
-            self.decoders_down.append(nn.Sequential(
-                # nn.Conv2d(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
-                GroupConv(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
-                nn.BatchNorm3d(h_dim),
-                nn.SiLU(),
-                SpatialTransformer_(h_dim,
-                                   num_heads,
-                                   dim_head,
-                                   depth=transform_depth,
-                                   context_dim=h_dim,
-                                   disable_self_attn=False,
-                                   use_linear=True,
-                                   attn_type="linear",
-                                   use_checkpoint=True,
-                                   layer=feature_size_decoder[i]
-                                   ),
-                nn.BatchNorm3d(h_dim),
-                nn.SiLU()
-            ))
-            in_channels = h_dim
-
-        # self.decoder_fpn = FPN_up([1024, 1024, 1024, 512], [1024, 1024, 512])
-        # reduce one layer for FPN
-        # self.decoder_fpn = FPN_up_g([512, 512, 512, 256], [512, 512, 256])
-        self.decoder_fpn = FPN_up_g([256, 256, 128], [256, 128])
-        self.decoders_up = nn.ModuleList()
-        # reduce one upsample layer, so start from 4
-        for i, h_dim in enumerate(hidden_dims_decoder[4:]):
-            modules = []
-            if i > 0 and i < 4:
-                in_channels = in_channels * 2
-            dim_head = h_dim // num_heads
-            modules.append(nn.Sequential(
-                                        GroupConvTranspose( in_channels,
-                                                            h_dim,
-                                                            kernel_size=3,
-                                                            stride=2,
-                                                            padding=1,
-                                                            output_padding=1),
-                                         nn.BatchNorm3d(h_dim),
-                                         nn.SiLU()))
-            # since reducing one layer, so the last layer change to i = 4
-            if i < 3:
-                modules.append(nn.Sequential(SpatialTransformer_(h_dim,
-                                                                num_heads,
-                                                                dim_head,
-                                                                depth=transform_depth,
-                                                                context_dim=h_dim,
-                                                                disable_self_attn=False,
-                                                                use_linear=True,
-                                                                attn_type="linear",
-                                                                use_checkpoint=True,
-                                                                #TODO: should be i + 4?
-                                                                layer=feature_size_decoder[i + 3]
-                                                                ),
-                                             nn.BatchNorm3d(h_dim),
-                                             nn.SiLU()))
-                in_channels = h_dim
-            # TODO: seems this section is not used
-            # directly jump to last block which has resblock
-            else:
-                modules.append(nn.Sequential(ResBlock_g(
-                    h_dim,
-                    dropout=0,
-                    out_channels=h_dim,
-                    use_conv=True,
-                    dims=3,
-                    use_checkpoint=False,
-                ),
-                    nn.BatchNorm3d(h_dim),
-                    nn.SiLU()))
-                in_channels = h_dim
-            self.decoders_up.append(nn.Sequential(*modules))
-
-        self.decoders_up.append(nn.Sequential(
-            GroupConvTranspose(in_channels,
-                               in_channels,
-                               kernel_size=3,
-                               stride=2,
-                               padding=1,
-                               output_padding=1),
-            nn.BatchNorm3d(in_channels),
-            nn.SiLU(),
-            ResBlock_g(
-                in_channels,
-                dropout=0,
-                out_channels=self.plane_shape[1],
-                use_conv=True,
-                dims=3,
-                use_checkpoint=False,
-                group_layer_num_out=1,
-            ),
-            nn.BatchNorm3d(self.plane_shape[1]),
-            nn.Tanh()))
-    
-    def my_init(self, vae_config) -> None:
 
         kl_std = vae_config.get("kl_std", 0.25)
         kl_weight = vae_config.get("kl_weight", 0.001)
@@ -2546,14 +2266,9 @@ if __name__ == "__main__":
                   "num_heads": 16,
                   "transform_depth": 1}
 
-    # vae_model = VAE(vae_config)
-    # # get_size_of_model(vae_model)
-    # vae_model = torch.nn.DataParallel(vae_model)    
-    # vae_model = vae_model.cuda()
-
-    vae_model_refac = VAE(vae_config, False)
-    vae_model_refac = torch.nn.DataParallel(vae_model_refac)
-    vae_model_refac = vae_model_refac.cuda()
+    vae_model = VAE(vae_config)
+    vae_model = torch.nn.DataParallel(vae_model)
+    vae_model = vae_model.cuda()
 
     # read raw data
     raw_data_path = "/media/data/qadwu/volume/vortices/vorts50.data"
@@ -2570,25 +2285,19 @@ if __name__ == "__main__":
     # # batch_size = 2, plane_shape
     # input_tensor = torch.randn(2, original_input_channels, 128, 128, 128).cuda()
     
-    # out = vae_model(input_tensor)
-    # loss = vae_model.module.loss_function(*out)
-    # print("loss: {}".format(loss))
-    # print("z shape: {}".format(out[-1].shape))
-    # print("reconstruct shape: {}".format(out[0].shape))
-    
     # just see whether preliminary results generated by refactored version of VAE is reasonable
-    out_refac = vae_model_refac(input_tensor)
-    loss_refac = vae_model_refac.module.loss_function(*out_refac)
-    print("loss: {}".format(loss_refac))
-    print("z shape: {}".format(out_refac[-1].shape))
-    print("reconstruct shape: {}".format(out_refac[0].shape))
+    out = vae_model(input_tensor)
+    loss = vae_model.module.loss_function(*out)
+    print("loss: {}".format(loss))
+    print("z shape: {}".format(out[-1].shape))
+    print("reconstruct shape: {}".format(out[0].shape))
     
     # device_name = "cuda" if torch.cuda.is_available() else "cpu"
     # device = torch.device(device_name)
     
     # test training autoencoder
-    optimizer = torch.optim.Adam(vae_model_refac.parameters(), lr=1e-3)
-    train_vae(vae_model_refac, input_tensor, optimizer, epochs=2000)
+    optimizer = torch.optim.Adam(vae_model.parameters(), lr=1e-3)
+    train_vae(vae_model, input_tensor, optimizer, epochs=2000)
     
     # samples = vae_model.sample(2)
     # print("samples shape: {}".format(samples[0].shape))
