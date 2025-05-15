@@ -1524,13 +1524,13 @@ class VAE(nn.Module):
             self.decoders_up.append(self.make_block(downsample=False, **config))
 
 
-    def make_block(self, downsample, in_channels, inter_channels, out_channels, feature_size,
+    def make_block(self, downsample, in_channels, inter_channels, stride, out_channels, feature_size,
                    use_transformer=False, use_resblock=True, is_decoder_output=False):
         layers = []
         if downsample:
-            conv = GroupConv(in_channels, inter_channels, kernel_size=3, stride=2, padding=1)
+            conv = GroupConv(in_channels, inter_channels, kernel_size=3, stride=stride, padding=1)
         else:
-            conv = GroupConvTranspose(in_channels, inter_channels, kernel_size=3, stride=2, padding=1, output_padding=1)
+            conv = GroupConvTranspose(in_channels, inter_channels, kernel_size=3, stride=stride, padding=1, output_padding=1)
         layers.extend([conv, nn.BatchNorm3d(inter_channels), nn.SiLU()])
         
         if use_transformer:
@@ -2211,8 +2211,8 @@ if __name__ == "__main__":
     feature_size_encoder = [128, 64,  32,  16,  8,   4,    8,  16,   32]
     
     # decoder_in_channels = 128
-    decoder_dims = [128, 256, 256, 256, 256, 256, 128, 128]
-    feature_size_decoder = [32, 16, 8, 4, 8, 16, 32, 64]
+    decoder_dims = [128, 256, 256, 256, 256, 256, 128, 128] #last dims in this list is the dims before the original shape
+    feature_size_decoder = [32, 16, 8, 4, 8, 16, 32, 64] #last dims in this list is the dims before the original shape
     
     # these indices index for encoder_dims/decoder_dims
     fpn_encoders_layer_dim_idx = [2, 3, 4]
@@ -2226,48 +2226,48 @@ if __name__ == "__main__":
     
     block_config = {
         "encoders_down": [
-                            {"in_channels":encoder_dims[0], "inter_channels":encoder_dims[1], 
+                            {"in_channels":encoder_dims[0], "inter_channels":encoder_dims[1], "stride":2,
                             "out_channels":encoder_dims[1], "feature_size":feature_size_encoder[1], 
                             "use_transformer":False, "use_resblock":True, "is_decoder_output": False},
-                            {"in_channels":encoder_dims[1], "inter_channels":encoder_dims[2], 
+                            {"in_channels":encoder_dims[1], "inter_channels":encoder_dims[2], "stride":2,
                             "out_channels":encoder_dims[2], "feature_size":feature_size_encoder[2], 
                             "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                            {"in_channels":encoder_dims[2], "inter_channels":encoder_dims[3], 
+                            {"in_channels":encoder_dims[2], "inter_channels":encoder_dims[3], "stride":2,
                             "out_channels":encoder_dims[3], "feature_size":feature_size_encoder[3], 
                             "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                            {"in_channels":encoder_dims[3], "inter_channels":encoder_dims[4], 
+                            {"in_channels":encoder_dims[3], "inter_channels":encoder_dims[4], "stride":2,
                             "out_channels":encoder_dims[4], "feature_size":feature_size_encoder[4], 
                             "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
                         ],
         "encoders_up": [
                         # twice wider of input channels for FPN layer input
-                        {"in_channels":encoder_dims[4]*2, "inter_channels":encoder_dims[7], 
+                        {"in_channels":encoder_dims[4]*2, "inter_channels":encoder_dims[7], "stride":2,
                             "out_channels":encoder_dims[7], "feature_size":feature_size_encoder[7], 
                             "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                            {"in_channels":encoder_dims[7]*2, "inter_channels":encoder_dims[8], 
+                            {"in_channels":encoder_dims[7]*2, "inter_channels":encoder_dims[8], "stride":2,
                             "out_channels":2 * vae_config["z_shape"][0], "feature_size":feature_size_encoder[8], 
                             "use_transformer":False, "use_resblock":True, "is_decoder_output": False}
                         ],
         "decoders_down": [
-                        {"in_channels":decoder_dims[0], "inter_channels":decoder_dims[1], 
+                        {"in_channels":decoder_dims[0], "inter_channels":decoder_dims[1], "stride":2,
                             "out_channels":decoder_dims[1], "feature_size":feature_size_decoder[1], 
                             "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                            {"in_channels":decoder_dims[1], "inter_channels":decoder_dims[2], 
+                            {"in_channels":decoder_dims[1], "inter_channels":decoder_dims[2], "stride":2,
                             "out_channels":decoder_dims[2], "feature_size":feature_size_decoder[2], 
                             "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
                         ],
         "decoders_up": [
-                        {"in_channels":decoder_dims[2], "inter_channels":decoder_dims[5], 
+                        {"in_channels":decoder_dims[2], "inter_channels":decoder_dims[5], "stride":2,
                             "out_channels":decoder_dims[5], "feature_size":feature_size_decoder[5], 
                             "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
                         # twice wider of input channels for FPN layer input
-                            {"in_channels":decoder_dims[5]*2, "inter_channels":decoder_dims[6], 
+                            {"in_channels":decoder_dims[5]*2, "inter_channels":decoder_dims[6], "stride":2,
                             "out_channels":decoder_dims[6], "feature_size":feature_size_decoder[6], 
                             "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                            {"in_channels":decoder_dims[6]*2, "inter_channels":decoder_dims[7], 
+                            {"in_channels":decoder_dims[6]*2, "inter_channels":decoder_dims[7], "stride":2,
                             "out_channels":decoder_dims[7], "feature_size":feature_size_decoder[7], 
                             "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                            {"in_channels":decoder_dims[7], "inter_channels":decoder_dims[7], 
+                            {"in_channels":decoder_dims[7], "inter_channels":decoder_dims[7], "stride":2,
                             "out_channels":vae_config["plane_shape"][1], "feature_size":vae_config["plane_shape"][2], 
                             "use_transformer":False, "use_resblock":True, "is_decoder_output": True},
                         ],
