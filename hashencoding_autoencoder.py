@@ -10,6 +10,7 @@ def parse_args():
     parser.add_argument("--expname", type=str, default="VAE_training_on_raw_volumes", help="Experiment name")
     parser.add_argument("--batch_size", type=int, default=2, help="Batch size for training")
     parser.add_argument("--epochs", type=int, default=1000, help="Number of epochs to train")
+    parser.add_argument("--ckpt_freq", type=int, default=1000, help="Checkpoint frequency")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate for training")
     return parser.parse_args()
 
@@ -48,6 +49,7 @@ def train_vae(vae_model, train_dataloader, optimizer, epochs=100, tensorboard_wr
                 recon_loss = F.mse_loss(output[0], raw_data)
                 kl_loss = vae_model.module.loss_function(*output)
                 loss = recon_loss + kl_loss
+                # loss = recon_loss
             scalar.scale(loss).backward()
             scalar.step(optimizer)
             scalar.update()
@@ -62,6 +64,7 @@ def train_vae(vae_model, train_dataloader, optimizer, epochs=100, tensorboard_wr
             
             # TODO: need to sperate PSNR evaluation from each volume (cause currently has four volumes in one batch)
             console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}")
+            # console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}")
         
         val_range = max - min
         
@@ -77,7 +80,7 @@ def train_vae(vae_model, train_dataloader, optimizer, epochs=100, tensorboard_wr
         tensorboard_writer.add_scalar("Loss/Train_PSNR", last_PSNR, epoch)
         
         # save the model at checkpoint
-        if epoch % ckpt_freq == (ckpt_freq - 1):
+        if (epoch % ckpt_freq == (ckpt_freq - 1)) or (epoch == epochs - 1):
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': vae_model.state_dict(),
@@ -110,6 +113,7 @@ if __name__ == "__main__":
     # encoder_in_channels = 64
     #                   idx:0,   1,   2,   3,   4,  5,   6,  7,     8,     9
     encoder_dims =         [32, 64, 128, 256, 512, 1024, 512, 256, 128,  2 * vae_config["z_shape"][0]]
+    # encoder_dims =         [32, 64, 128, 256, 512, 1024, 512, 256, 128,  vae_config["z_shape"][0]]
     feature_size_encoder = [32, 16,  8,   4,   2,   1,    2,   4,   8,  16]
     
     # decoder_in_channels = 128
@@ -248,7 +252,7 @@ if __name__ == "__main__":
     optimizer = torch.optim.Adam(vae_model.parameters(), lr=args.lr)
     print("learning rate: {}".format(args.lr))
     train_vae(vae_model, train_dataloader, optimizer,
-              args.epochs, tensorboard_writer, console_logger, run_dir, ckpt_freq=2000)
+              args.epochs, tensorboard_writer, console_logger, run_dir, ckpt_freq=args.ckpt_freq)
     
     # tensorboard_writer.close()
     # # samples = vae_model.sample(2)
