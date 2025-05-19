@@ -11,7 +11,9 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=2, help="Batch size for training")
     parser.add_argument("--epochs", type=int, default=1000, help="Number of epochs to train")
     parser.add_argument("--ckpt_freq", type=int, default=1000, help="Checkpoint frequency")
-    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate for training")
+    parser.add_argument("--init_lr", type=float, default=1e-3, help="Initial learning rate for training")
+    parser.add_argument("--lr_decay", type=int, default=3000, help="Learning rate decay frequency")
+    parser.add_argument("--lr_gamma", type=float, default=0.2, help="Learning rate decay factor")
     return parser.parse_args()
 
 # redefinition of traning pipeline for multiple input volumes
@@ -63,8 +65,8 @@ def train_vae(vae_model, train_dataloader, optimizer, epochs=100, tensorboard_wr
             total_elems += raw_data.shape[0]
             
             # TODO: need to sperate PSNR evaluation from each volume (cause currently has four volumes in one batch)
-            console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}")
-            # console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}")
+            console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
+            # console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
         
         val_range = max - min
         
@@ -78,6 +80,10 @@ def train_vae(vae_model, train_dataloader, optimizer, epochs=100, tensorboard_wr
         tensorboard_writer.add_scalar("Loss/Train_KL", last_kl_loss, epoch)
         tensorboard_writer.add_scalar("Loss/Train", last_loss, epoch)
         tensorboard_writer.add_scalar("Loss/Train_PSNR", last_PSNR, epoch)
+        tensorboard_writer.add_scalar("Learning Rate", scheduler.get_last_lr()[0], epoch)
+        
+        # adjust learning rate
+        scheduler.step()
         
         # save the model at checkpoint
         if (epoch % ckpt_freq == (ckpt_freq - 1)) or (epoch == epochs - 1):
@@ -247,10 +253,13 @@ if __name__ == "__main__":
     # # save model architecture into tensorboard
     model_arch_str = str(vae_model)
     tensorboard_writer.add_text("Model/Architecture", f"```\n{model_arch_str}\n```", global_step=0)
+    # console_logger.debug(f"Model architecture:\n{model_arch_str}")
+    console_logger.debug(f"Batch Size: {args.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
+    console_logger.debug(f"Initial Learning rate: {args.init_lr}, Learning rate decay frequency: {args.lr_decay}, Learning rate decay factor: {args.lr_gamma}")
     
     # # test training autoencoder
-    optimizer = torch.optim.Adam(vae_model.parameters(), lr=args.lr)
-    print("learning rate: {}".format(args.lr))
+    optimizer = torch.optim.Adam(vae_model.parameters(), lr=args.init_lr)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.lr_decay, gamma=args.lr_gamma)
     train_vae(vae_model, train_dataloader, optimizer,
               args.epochs, tensorboard_writer, console_logger, run_dir, ckpt_freq=args.ckpt_freq)
     
