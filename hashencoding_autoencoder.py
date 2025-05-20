@@ -14,10 +14,12 @@ def parse_args():
     parser.add_argument("--init_lr", type=float, default=1e-3, help="Initial learning rate for training")
     parser.add_argument("--lr_decay", type=int, default=3000, help="Learning rate decay frequency")
     parser.add_argument("--lr_gamma", type=float, default=0.2, help="Learning rate decay factor")
+    parser.add_argument("--resume_training_dir", type=str, default=None, help="Directory to resume training from")
+    parser.add_argument("--resume_model_file_name", type=str, default=None, help="Model file name to resume training from")
     return parser.parse_args()
 
 # redefinition of traning pipeline for multiple input volumes
-def train_vae(vae_model, train_dataloader, optimizer, epochs=100, tensorboard_writer=None, console_logger=None, run_dir=None, ckpt_freq=100):
+def train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_decay, lr_gamma, epochs=100, tensorboard_writer=None, console_logger=None, run_dir=None, ckpt_freq=100, resume_epoch=0):
 
     vae_model.train()
     
@@ -26,6 +28,8 @@ def train_vae(vae_model, train_dataloader, optimizer, epochs=100, tensorboard_wr
     scalar = torch.amp.GradScaler("cuda", enabled=False)
     
     for epoch in range(epochs):
+        epoch = epoch + resume_epoch
+        
         running_recon_loss = 0.0
         running_kl_loss = 0.0
         running_loss = 0.0
@@ -49,9 +53,9 @@ def train_vae(vae_model, train_dataloader, optimizer, epochs=100, tensorboard_wr
                 output = vae_model(raw_data)
                 # reconstructed results is the first element of the output (output[0])
                 recon_loss = F.mse_loss(output[0], raw_data)
-                kl_loss = vae_model.module.loss_function(*output)
-                loss = recon_loss + kl_loss
-                # loss = recon_loss
+                # kl_loss = vae_model.module.loss_function(*output)
+                # loss = recon_loss + kl_loss
+                loss = recon_loss
             scalar.scale(loss).backward()
             scalar.step(optimizer)
             scalar.update()
@@ -60,13 +64,13 @@ def train_vae(vae_model, train_dataloader, optimizer, epochs=100, tensorboard_wr
             # optimizer.step()
             
             running_recon_loss += recon_loss.item() * raw_data.shape[0]
-            running_kl_loss += kl_loss.item() * raw_data.shape[0]
+            # running_kl_loss += kl_loss.item() * raw_data.shape[0]
             running_loss += running_recon_loss + running_kl_loss
             total_elems += raw_data.shape[0]
             
             # TODO: need to sperate PSNR evaluation from each volume (cause currently has four volumes in one batch)
-            console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
-            # console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
+            # console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
+            console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
         
         val_range = max - min
         
@@ -86,12 +90,15 @@ def train_vae(vae_model, train_dataloader, optimizer, epochs=100, tensorboard_wr
         scheduler.step()
         
         # save the model at checkpoint
-        if (epoch % ckpt_freq == (ckpt_freq - 1)) or (epoch == epochs - 1):
+        if (epoch % ckpt_freq == (ckpt_freq - 1)) or (epoch == (epochs + resume_epoch) - 1):
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': vae_model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                # 'scheduler_state_dict': scheduler.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'init_lr': init_lr,
+                'lr_decay': lr_decay,
+                'lr_gamma': lr_gamma,
                 'loss': last_loss,
                 'recon_loss': last_recon_loss,
                 'kl_loss': last_kl_loss,
@@ -118,8 +125,8 @@ if __name__ == "__main__":
 
     # encoder_in_channels = 64
     #                   idx:0,   1,   2,   3,   4,  5,   6,  7,     8,     9
-    encoder_dims =         [32, 64, 128, 256, 512, 1024, 512, 256, 128,  2 * vae_config["z_shape"][0]]
-    # encoder_dims =         [32, 64, 128, 256, 512, 1024, 512, 256, 128,  vae_config["z_shape"][0]]
+    # encoder_dims =         [32, 64, 128, 256, 512, 1024, 512, 256, 128,  2 * vae_config["z_shape"][0]]
+    encoder_dims =         [32, 64, 128, 256, 512, 1024, 512, 256, 128,  vae_config["z_shape"][0]]
     feature_size_encoder = [32, 16,  8,   4,   2,   1,    2,   4,   8,  16]
     
     # decoder_in_channels = 128
@@ -219,22 +226,31 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         shuffle=True)
     
-    # # create directory for saving logs
-    base_dir = "./logs"
-    os.makedirs(base_dir, exist_ok=True)
-    expname_dir = os.path.join(base_dir, args.expname)
-    os.makedirs(expname_dir, exist_ok=True)
-    run_dir = os.path.join(expname_dir, datetime.now().strftime("%Y%m%d-%H%M%S"))
-    os.makedirs(run_dir, exist_ok=True)
+    # resume training from ckpt
+    if args.resume_training_dir and args.resume_model_file_name:
+        run_dir = args.resume_training_dir
+        logging_file_md = 'a'
+        loaded_ckpt = torch.load(os.path.join(args.resume_training_dir, args.resume_model_file_name))
+    elif (args.resume_training_dir and not args.resume_model_file_name) or (not args.resume_training_dir and args.resume_model_file_name):
+        RuntimeError("Missing resume training directory or model file name to resume training")
+    else:
+        # create directory for saving logs
+        base_dir = "./logs"
+        os.makedirs(base_dir, exist_ok=True)
+        expname_dir = os.path.join(base_dir, args.expname)
+        os.makedirs(expname_dir, exist_ok=True)
+        run_dir = os.path.join(expname_dir, datetime.now().strftime("%Y%m%d-%H%M%S"))
+        os.makedirs(run_dir, exist_ok=True)
+        logging_file_md = 'w'
     
-    # # create tensorboard logger
+    # create tensorboard logger
     from torch.utils.tensorboard import SummaryWriter
     tensorboard_writer = SummaryWriter(log_dir=run_dir)
     
     # # prepare python logger
     logging.basicConfig(filename=os.path.join(run_dir, "console_log.log"),
                     format='%(asctime)s %(message)s',
-                    filemode='w')
+                    filemode=logging_file_md)
     console_logger = logging.getLogger()
     console_logger.setLevel(logging.DEBUG)
     
@@ -245,23 +261,43 @@ if __name__ == "__main__":
     # currently not working, because in order to draw the computational graph,
     # the model forward function should not has data-dependent control flow
     # tensorboard_writer.add_graph(vae_model.module, test_data.detach())
-    loss = vae_model.module.loss_function(*out)
-    print("loss: {}".format(loss))
+    # loss = vae_model.module.loss_function(*out)
+    # print("loss: {}".format(loss))
     print("z shape: {}".format(out[-1].shape))
     print("reconstruct shape: {}".format(out[0].shape))
     
-    # # save model architecture into tensorboard
+    # save model architecture into tensorboard
     model_arch_str = str(vae_model)
-    tensorboard_writer.add_text("Model/Architecture", f"```\n{model_arch_str}\n```", global_step=0)
-    # console_logger.debug(f"Model architecture:\n{model_arch_str}")
-    console_logger.debug(f"Batch Size: {args.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
-    console_logger.debug(f"Initial Learning rate: {args.init_lr}, Learning rate decay frequency: {args.lr_decay}, Learning rate decay factor: {args.lr_gamma}")
     
-    # # test training autoencoder
     optimizer = torch.optim.Adam(vae_model.parameters(), lr=args.init_lr)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.lr_decay, gamma=args.lr_gamma)
-    train_vae(vae_model, train_dataloader, optimizer,
-              args.epochs, tensorboard_writer, console_logger, run_dir, ckpt_freq=args.ckpt_freq)
+    # resume training
+    if args.resume_training_dir and args.resume_model_file_name:
+        resume_epoch = loaded_ckpt["epoch"] + 1
+        init_lr = loaded_ckpt["init_lr"]
+        lr_decay = loaded_ckpt["lr_decay"]
+        lr_gamma = loaded_ckpt["lr_gamma"]
+        console_logger.debug(f"Resume training from {args.resume_training_dir}/{args.resume_model_file_name} at Epoch {resume_epoch}")
+        console_logger.debug(f"Batch Size: {args.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
+        console_logger.debug(f"Original initial learning rate: {init_lr}, original learning rate decay frequency: {lr_decay}, original learning rate decay factor: {lr_gamma}")
+        vae_model.load_state_dict(loaded_ckpt["model_state_dict"])
+        optimizer.load_state_dict(loaded_ckpt["optimizer_state_dict"])
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_decay, gamma=lr_gamma)
+        scheduler.load_state_dict(loaded_ckpt["scheduler_state_dict"])
+    # training from scratch
+    else:
+        resume_epoch = None
+        init_lr = args.init_lr
+        lr_decay = args.lr_decay
+        lr_gamma = args.lr_gamma
+        tensorboard_writer.add_text("Model/Architecture", f"```\n{model_arch_str}\n```", global_step=0)
+        # console_logger.debug(f"Model architecture:\n{model_arch_str}")
+        console_logger.debug(f"Batch Size: {args.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
+        console_logger.debug(f"Initial Learning rate: {init_lr}, Learning rate decay frequency: {lr_decay}, Learning rate decay factor: {lr_gamma}")
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_decay, gamma=lr_gamma)
+    
+    # test training autoencoder
+    train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_decay, lr_gamma, 
+              args.epochs, tensorboard_writer, console_logger, run_dir, ckpt_freq=args.ckpt_freq, resume_epoch=resume_epoch)
     
     # tensorboard_writer.close()
     # # samples = vae_model.sample(2)

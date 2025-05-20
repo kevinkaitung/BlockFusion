@@ -7,10 +7,8 @@ from datetime import datetime
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a VAE on time-varying data")
-    parser.add_argument("--expname", type=str, default="VAE_training_on_raw_volumes", help="Experiment name")
     parser.add_argument("--batch_size", type=int, default=2, help="Batch size for training")
     parser.add_argument("--epochs", type=int, default=1000, help="Number of epochs to train")
-    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate for training")
     parser.add_argument("--expdir", type=str, default="./logs/test_hashencoding_train/20250508-024915", help="Checkpoint Directory to load the model from")
     return parser.parse_args()
 
@@ -29,8 +27,8 @@ if __name__ == "__main__":
 
     # encoder_in_channels = 64
     #                   idx:0,   1,   2,   3,   4,  5,   6,  7,     8,     9
-    encoder_dims =         [32, 64, 128, 256, 512, 1024, 512, 256, 128,  2 * vae_config["z_shape"][0]]
-    # encoder_dims =         [32, 64, 128, 256, 512, 1024, 512, 256, 128,  vae_config["z_shape"][0]]
+    # encoder_dims =         [32, 64, 128, 256, 512, 1024, 512, 256, 128,  2 * vae_config["z_shape"][0]]
+    encoder_dims =         [32, 64, 128, 256, 512, 1024, 512, 256, 128,  vae_config["z_shape"][0]]
     feature_size_encoder = [32, 16,  8,   4,   2,   1,    2,   4,   8,  16]
     
     # decoder_in_channels = 128
@@ -119,7 +117,7 @@ if __name__ == "__main__":
                     fpn_decoders_layer_dim_idx, fpn_encoders_down_idx, fpn_encoders_up_idx, fpn_decoders_down_idx, fpn_decoders_up_idx, block_config)
     vae_model = torch.nn.DataParallel(vae_model)
     vae_model = vae_model.cuda()
-    vae_model.load_state_dict(torch.load(os.path.join(args.expdir, "vae_model_epoch_24999.ckpt"))["model_state_dict"])
+    vae_model.load_state_dict(torch.load(os.path.join(args.expdir, "vae_model_epoch_39999.ckpt"))["model_state_dict"])
     
     # # prepare dataset
     pretrained_weights = torch.load("/home/kctung/Projects/instant-vnr-pytorch/logs/hyperinr/debug/run00028/checkpoint-last.ckpt")
@@ -137,8 +135,8 @@ if __name__ == "__main__":
     print("test data shape: {}".format(test_data.shape))
     out = vae_model(test_data)
     
-    loss = vae_model.module.loss_function(*out)
-    print("loss: {}".format(loss))
+    # loss = vae_model.module.loss_function(*out)
+    # print("loss: {}".format(loss))
     print("z shape: {}".format(out[-1].shape))
     print("reconstruct shape: {}".format(out[0].shape))
     
@@ -148,11 +146,11 @@ if __name__ == "__main__":
         output = vae_model(raw_data)
         # reconstructed results is the first element of the output (output[0])
         recon_loss = F.mse_loss(output[0], raw_data)
-        kl_loss = vae_model.module.loss_function(*output)
-        loss = recon_loss + kl_loss
-        # loss = recon_loss
-        print(f"Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}")
-        # print(f"Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}")
+        # kl_loss = vae_model.module.loss_function(*output)
+        # loss = recon_loss + kl_loss
+        loss = recon_loss
+        # print(f"Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}")
+        print(f"Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}")
         outputs.append(output[0])
     
     outputs = torch.cat(outputs, dim=0)

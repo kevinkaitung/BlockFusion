@@ -1620,7 +1620,7 @@ class VAE(nn.Module):
                 features_down_idx += 1
             feature = module(feature)
 
-        # return feature
+        return feature
         encode_channel = self.z_shape[0]
         mu = feature[:, :encode_channel, ...]
         log_var = feature[:, encode_channel:, ...]
@@ -1668,12 +1668,12 @@ class VAE(nn.Module):
         return eps * std + mu
 
     def forward(self, data: Tensor, **kwargs) -> Tensor:
-        mu, log_var = self.encode(data)
-        z = self.reparameterize(mu, log_var)
-        # z = self.encode(data)
+        # mu, log_var = self.encode(data)
+        # z = self.reparameterize(mu, log_var)
+        z = self.encode(data)
         result = self.decode(z)
 
-        return [result, data, mu, log_var, z]
+        # return [result, data, mu, log_var, z]
         return [result, data, None, None, z]
 
     # only using VAE loss
