@@ -4,11 +4,13 @@ from timevarying_data_helper import TimevaryingDataset, EncodingWeightDataset
 import logging
 import argparse
 from datetime import datetime
+# model configs are stored as python scripts, import the target config here
+from autoencoder_config import model_a as cfg
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a VAE on time-varying data")
     parser.add_argument("--expname", type=str, default="VAE_training_on_raw_volumes", help="Experiment name")
-    parser.add_argument("--batch_size", type=int, default=2, help="Batch size for training")
+    # parser.add_argument("--batch_size", type=int, default=2, help="Batch size for training")
     parser.add_argument("--epochs", type=int, default=1000, help="Number of epochs to train")
     parser.add_argument("--ckpt_freq", type=int, default=1000, help="Checkpoint frequency")
     parser.add_argument("--init_lr", type=float, default=1e-3, help="Initial learning rate for training")
@@ -114,105 +116,8 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_dec
 if __name__ == "__main__":
     args = parse_args()
     
-    # setup VAE model hyperparameters
-    vae_config = {"kl_std": 0.25,
-                  "kl_weight": 0.001,
-                  # 3 planes (xy, yz, xz) * 32 channels (feature vectors) * 128x128
-                  "plane_shape": [args.batch_size, 8, 32, 32, 32],
-                  "z_shape": [4, 16, 16, 16],
-                  "num_heads": 16,
-                  "transform_depth": 1}
-
-    # encoder_in_channels = 64
-    #                   idx:0,   1,   2,   3,   4,  5,   6,  7,     8,     9
-    # encoder_dims =         [32, 64, 128, 256, 512, 1024, 512, 256, 128,  2 * vae_config["z_shape"][0]]
-    encoder_dims =         [32, 64, 128, 256, 512, 1024, 512, 256, 128,  vae_config["z_shape"][0]]
-    feature_size_encoder = [32, 16,  8,   4,   2,   1,    2,   4,   8,  16]
-    
-    # decoder_in_channels = 128
-    decoder_dims =         [32,  128, 256, 512, 1024, 512, 256, 128, 64, vae_config["plane_shape"][1]]
-    feature_size_decoder = [16,   8,   4,   2,   1,    2,   4,   8,  16, vae_config["plane_shape"][2]]
-    
-    # these indices index for encoder_dims/decoder_dims
-    fpn_encoders_layer_dim_idx = []
-    fpn_decoders_layer_dim_idx = []
-    
-    # these indices index for the group of blocks (i.e., encoders_down, ...) in block_config
-    fpn_encoders_down_idx = []
-    fpn_encoders_up_idx = []
-    fpn_decoders_down_idx = []
-    fpn_decoders_up_idx = []
-    
-    block_config = {
-        "encoders_down": [
-                            {"in_channels":encoder_dims[0], "inter_channels":encoder_dims[1], "stride":2,
-                            "out_channels":encoder_dims[1], "feature_size":feature_size_encoder[1], 
-                            "use_transformer":False, "use_resblock":True, "is_decoder_output": False},
-                            {"in_channels":encoder_dims[1], "inter_channels":encoder_dims[2], "stride":2,
-                            "out_channels":encoder_dims[2], "feature_size":feature_size_encoder[2], 
-                            "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                            {"in_channels":encoder_dims[2], "inter_channels":encoder_dims[3], "stride":2,
-                            "out_channels":encoder_dims[3], "feature_size":feature_size_encoder[3], 
-                            "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                            {"in_channels":encoder_dims[3], "inter_channels":encoder_dims[4], "stride":2,
-                            "out_channels":encoder_dims[4], "feature_size":feature_size_encoder[4], 
-                            "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                            {"in_channels":encoder_dims[4], "inter_channels":encoder_dims[5], "stride":2,
-                            "out_channels":encoder_dims[5], "feature_size":feature_size_encoder[5], 
-                            "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                        ],
-        "encoders_up": [
-                        # twice wider of input channels for FPN layer input
-                        {"in_channels":encoder_dims[5], "inter_channels":encoder_dims[6], "stride":2,
-                            "out_channels":encoder_dims[6], "feature_size":feature_size_encoder[6], 
-                            "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                        {"in_channels":encoder_dims[6], "inter_channels":encoder_dims[7], "stride":2,
-                            "out_channels":encoder_dims[7], "feature_size":feature_size_encoder[7], 
-                            "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                        {"in_channels":encoder_dims[7], "inter_channels":encoder_dims[8], "stride":2,
-                            "out_channels":encoder_dims[8], "feature_size":feature_size_encoder[8], 
-                            "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                            {"in_channels":encoder_dims[8], "inter_channels":encoder_dims[9], "stride":2,
-                            "out_channels":encoder_dims[9], "feature_size":feature_size_encoder[9], 
-                            "use_transformer":False, "use_resblock":True, "is_decoder_output": False}
-                        ],
-        "decoders_down": [
-                        {"in_channels":decoder_dims[0], "inter_channels":decoder_dims[1], "stride":2,
-                            "out_channels":decoder_dims[1], "feature_size":feature_size_decoder[1], 
-                            "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                            {"in_channels":decoder_dims[1], "inter_channels":decoder_dims[2], "stride":2,
-                            "out_channels":decoder_dims[2], "feature_size":feature_size_decoder[2], 
-                            "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                        {"in_channels":decoder_dims[2], "inter_channels":decoder_dims[3], "stride":2,
-                            "out_channels":decoder_dims[3], "feature_size":feature_size_decoder[3], 
-                            "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                            {"in_channels":decoder_dims[3], "inter_channels":decoder_dims[4], "stride":2,
-                            "out_channels":decoder_dims[4], "feature_size":feature_size_decoder[4], 
-                            "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                        ],
-        "decoders_up": [
-                        {"in_channels":decoder_dims[4], "inter_channels":decoder_dims[5], "stride":2,
-                            "out_channels":decoder_dims[5], "feature_size":feature_size_decoder[5], 
-                            "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                        # twice wider of input channels for FPN layer input
-                            {"in_channels":decoder_dims[5], "inter_channels":decoder_dims[6], "stride":2,
-                            "out_channels":decoder_dims[6], "feature_size":feature_size_decoder[6], 
-                            "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                            {"in_channels":decoder_dims[6], "inter_channels":decoder_dims[7], "stride":2,
-                            "out_channels":decoder_dims[7], "feature_size":feature_size_decoder[7], 
-                            "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                            {"in_channels":decoder_dims[7], "inter_channels":decoder_dims[8], "stride":2,
-                            "out_channels":decoder_dims[8], "feature_size":feature_size_decoder[8], 
-                            "use_transformer":True, "use_resblock":False, "is_decoder_output": False},
-                            {"in_channels":decoder_dims[8], "inter_channels":decoder_dims[8], "stride":2,
-                            "out_channels":decoder_dims[9], "feature_size":feature_size_decoder[9], 
-                            "use_transformer":False, "use_resblock":True, "is_decoder_output": True},
-                        ],
-    }
-    
-
-    vae_model = VAE(vae_config, encoder_dims, feature_size_encoder, decoder_dims, feature_size_decoder, fpn_encoders_layer_dim_idx,
-                    fpn_decoders_layer_dim_idx, fpn_encoders_down_idx, fpn_encoders_up_idx, fpn_decoders_down_idx, fpn_decoders_up_idx, block_config)
+    vae_model = VAE(cfg.vae_config, cfg.encoder_dims, cfg.feature_size_encoder, cfg.decoder_dims, cfg.feature_size_decoder, cfg.fpn_encoders_layer_dim_idx,
+                    cfg.fpn_decoders_layer_dim_idx, cfg.fpn_encoders_down_idx, cfg.fpn_encoders_up_idx, cfg.fpn_decoders_down_idx, cfg.fpn_decoders_up_idx, cfg.block_config)
     vae_model = torch.nn.DataParallel(vae_model)
     vae_model = vae_model.cuda()
     
@@ -223,7 +128,8 @@ if __name__ == "__main__":
             pretrained_weights_info=pretrained_weights["model_state_dict"],
             level=1
         ),
-        batch_size=args.batch_size,
+        # batch_size=args.batch_size,
+        batch_size=cfg.batch_size,
         shuffle=True)
     
     # resume training from ckpt
@@ -277,7 +183,7 @@ if __name__ == "__main__":
         lr_decay = loaded_ckpt["lr_decay"]
         lr_gamma = loaded_ckpt["lr_gamma"]
         console_logger.debug(f"Resume training from {args.resume_training_dir}/{args.resume_model_file_name} at Epoch {resume_epoch}")
-        console_logger.debug(f"Batch Size: {args.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
+        console_logger.debug(f"Batch Size: {cfg.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
         console_logger.debug(f"Original initial learning rate: {init_lr}, original learning rate decay frequency: {lr_decay}, original learning rate decay factor: {lr_gamma}")
         vae_model.load_state_dict(loaded_ckpt["model_state_dict"])
         optimizer.load_state_dict(loaded_ckpt["optimizer_state_dict"])
@@ -285,13 +191,13 @@ if __name__ == "__main__":
         scheduler.load_state_dict(loaded_ckpt["scheduler_state_dict"])
     # training from scratch
     else:
-        resume_epoch = None
+        resume_epoch = 0
         init_lr = args.init_lr
         lr_decay = args.lr_decay
         lr_gamma = args.lr_gamma
         tensorboard_writer.add_text("Model/Architecture", f"```\n{model_arch_str}\n```", global_step=0)
         # console_logger.debug(f"Model architecture:\n{model_arch_str}")
-        console_logger.debug(f"Batch Size: {args.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
+        console_logger.debug(f"Batch Size: {cfg.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
         console_logger.debug(f"Initial Learning rate: {init_lr}, Learning rate decay frequency: {lr_decay}, Learning rate decay factor: {lr_gamma}")
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_decay, gamma=lr_gamma)
     
