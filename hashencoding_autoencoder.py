@@ -4,8 +4,7 @@ from timevarying_data_helper import TimevaryingDataset, EncodingWeightDataset
 import logging
 import argparse
 from datetime import datetime
-# model configs are stored as python scripts, import the target config here
-from autoencoder_config import model_a as cfg
+import importlib
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a VAE on time-varying data")
@@ -18,6 +17,7 @@ def parse_args():
     parser.add_argument("--lr_gamma", type=float, default=0.2, help="Learning rate decay factor")
     parser.add_argument("--resume_training_dir", type=str, default=None, help="Directory to resume training from")
     parser.add_argument("--resume_model_file_name", type=str, default=None, help="Model file name to resume training from")
+    parser.add_argument("--model_config", type=str, default="model_a", help="Model config file name")
     return parser.parse_args()
 
 # redefinition of traning pipeline for multiple input volumes
@@ -115,6 +115,9 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_dec
         
 if __name__ == "__main__":
     args = parse_args()
+    
+    # model configs are stored as python scripts, import the target config here
+    cfg = importlib.import_module(f"autoencoder_config.{args.model_config}")
     
     vae_model = VAE(cfg.vae_config, cfg.encoder_dims, cfg.feature_size_encoder, cfg.decoder_dims, cfg.feature_size_decoder, cfg.fpn_encoders_layer_dim_idx,
                     cfg.fpn_decoders_layer_dim_idx, cfg.fpn_encoders_down_idx, cfg.fpn_encoders_up_idx, cfg.fpn_decoders_down_idx, cfg.fpn_decoders_up_idx, cfg.block_config)

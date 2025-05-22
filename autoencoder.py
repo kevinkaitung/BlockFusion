@@ -1530,7 +1530,12 @@ class VAE(nn.Module):
         if downsample:
             conv = GroupConv(in_channels, inter_channels, kernel_size=3, stride=stride, padding=1)
         else:
-            conv = GroupConvTranspose(in_channels, inter_channels, kernel_size=3, stride=stride, padding=1, output_padding=1)
+            if stride == 1:
+                conv = GroupConvTranspose(in_channels, inter_channels, kernel_size=3, stride=stride, padding=1, output_padding=0)
+            elif stride == 2:
+                conv = GroupConvTranspose(in_channels, inter_channels, kernel_size=3, stride=stride, padding=1, output_padding=1)
+            else:
+                RuntimeError(f"Unsupported stride {stride} for conv layer")
         layers.extend([conv, nn.BatchNorm3d(inter_channels), nn.SiLU()])
         
         if use_transformer:
@@ -1616,6 +1621,7 @@ class VAE(nn.Module):
         features_down_idx = 0
         for i, module in enumerate(self.encoders_up):
             if i in self.fpn_encoders_up_idx:
+                # print("idx: ", i, " feature: ", feature.shape, " features_down:", features_down[features_down_idx].shape)
                 feature = torch.cat([feature, features_down[features_down_idx]], dim=1)
                 features_down_idx += 1
             feature = module(feature)
@@ -1643,6 +1649,7 @@ class VAE(nn.Module):
         features_down_idx = 1
         for i, module in enumerate(self.decoders_up):
             if i in self.fpn_decoders_up_idx:
+                # print("idx: ", i, " x: ", x.shape, " feature_down:", feature_down[-features_down_idx].shape)
                 x = torch.cat([x, feature_down[-features_down_idx]], dim=1)
                 features_down_idx += 1
                 x = module(x)

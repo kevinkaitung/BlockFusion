@@ -4,25 +4,29 @@ from timevarying_data_helper import TimevaryingDataset, EncodingWeightDataset
 import logging
 import argparse
 from datetime import datetime
-# model configs are stored as python scripts, import the target config here
-from autoencoder_config import model_a as cfg
+import importlib
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a VAE on time-varying data")
     # parser.add_argument("--batch_size", type=int, default=2, help="Batch size for training")
     parser.add_argument("--epochs", type=int, default=1000, help="Number of epochs to train")
     parser.add_argument("--expdir", type=str, default="./logs/test_hashencoding_train/20250508-024915", help="Checkpoint Directory to load the model from")
+    parser.add_argument("--model_file_name", type=str, default="vae_model_epoch_9999.ckpt", help="Model file name")
+    parser.add_argument("--model_config", type=str, default="model_a", help="Model config file name")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
     
+    # model configs are stored as python scripts, import the target config here
+    cfg = importlib.import_module(f"autoencoder_config.{args.model_config}")
+    
     vae_model = VAE(cfg.vae_config, cfg.encoder_dims, cfg.feature_size_encoder, cfg.decoder_dims, cfg.feature_size_decoder, cfg.fpn_encoders_layer_dim_idx,
                     cfg.fpn_decoders_layer_dim_idx, cfg.fpn_encoders_down_idx, cfg.fpn_encoders_up_idx, cfg.fpn_decoders_down_idx, cfg.fpn_decoders_up_idx, cfg.block_config)
     vae_model = torch.nn.DataParallel(vae_model)
     vae_model = vae_model.cuda()
-    vae_model.load_state_dict(torch.load(os.path.join(args.expdir, "vae_model_epoch_39999.ckpt"))["model_state_dict"])
+    vae_model.load_state_dict(torch.load(os.path.join(args.expdir, args.model_file_name))["model_state_dict"])
     
     # # prepare dataset
     pretrained_weights = torch.load("/home/kctung/Projects/instant-vnr-pytorch/logs/hyperinr/debug/run00028/checkpoint-last.ckpt")
