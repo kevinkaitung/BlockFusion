@@ -4,19 +4,12 @@ import argparse
 from torch import nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset
-# import open3d as o3d
-# import mcubes, trimesh
+import open3d as o3d
+import mcubes, trimesh
 import torch
 import numpy as np
-import os, sys
+import os
 import json
-
-# Add parent directory to sys.path
-# TODO: make it more flexible to call timevarying_data_helper anywhere
-parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-from timevarying_data_helper import SampleTimevaryingDataset
 
 def vis_model(net, triplane, n_labels, savedir, oid=0, rank=0):
     os.makedirs(savedir, exist_ok=True)
@@ -89,6 +82,95 @@ def get_triangle_points(obj):
     tri_normals = torch.from_numpy(normals).float()
     return tri_points, tri_normals
 
+
+class CropDataset(Dataset):
+    def __init__(self, config):
+        super().__init__()
+        self.datadir = config.objpaths
+        cropid = int(self.datadir.split("/")[-1][4:-4])  # xx/xx/crop{}.obj
+        self.manifold = o3d.io.read_triangle_mesh(self.datadir)
+        self.tri_points, self.tri_normals = get_triangle_points(self.manifold)
+        self.pcd_num = config.pcd_num
+        assert self.pcd_num > len(self.tri_points)
+
+        sdf_npz = np.load(os.path.join(os.path.dirname(self.datadir), "sdf_points.npz"))
+        self.bbox = torch.from_numpy(
+            np.load(os.path.join(os.path.dirname(self.datadir), "bbxs.npy"))[cropid]
+        ).float()  # [2,3]
+        self.scale, self.translate = self.parse_bbox(self.bbox)
+        self.sdf_points, self.sdf_sdfs = self.crop_sdf_gt(sdf_npz, self.bbox)  # [Ns,3], [Ns,1]
+        self.sdf_num = len(self.sdf_sdfs)
+        self.points = None
+        self.normals = None
+        self.masks = None
+        self.sdfs = None
+
+        self.N = self.pcd_num + self.sdf_num
+        self.B = config.batch_size
+        self.perm()
+
+        self.length = (self.N - 1) // self.B + 1
+        self.i = 0
+
+    def parse_bbox(self, bbox):
+        aa, bb = bbox
+        return 0.625, -(aa + bb) / 2
+
+
+    def crop_sdf_gt(self, sdf_npz, bbox):
+        pts = torch.from_numpy(sdf_npz['query_points']).float()  # [N,3]
+        sdf = torch.from_numpy(sdf_npz['sdf']).float()  # [N,]
+        aa, bb = bbox
+        maskx = torch.logical_and(pts[:, 0] > aa[0], pts[:, 0] < bb[0])
+        masky = torch.logical_and(pts[:, 1] > aa[1], pts[:, 1] < bb[1])
+        maskz = torch.logical_and(pts[:, 2] > aa[2], pts[:, 2] < bb[2])
+        mask = torch.logical_and(maskx, torch.logical_and(masky, maskz))
+        return pts[mask], sdf[mask].unsqueeze(-1)
+
+    def sample_points(self, ):
+        pcd = self.manifold.sample_points_uniformly(self.pcd_num - len(self.tri_points), True)
+
+        pcd_points = np.asarray(pcd.points)  # [N,3]
+        pcd_normals = np.asarray(pcd.normals)  # [N,3]
+        # pcd_colors = np.asarray(pcd.colors)  # [N,4]
+        return pcd_points, pcd_normals
+
+    def perm(self):
+        pcd_points, pcd_normals = self.sample_points()
+        pcd_points = torch.from_numpy(pcd_points).float()
+        pcd_normals = torch.from_numpy(pcd_normals).float()
+
+        # [N,3], [N,3], [N,1], [N,]
+        self.points = torch.cat([pcd_points, self.tri_points, self.sdf_points])
+        self.normals = torch.cat([pcd_normals, self.tri_normals, torch.zeros_like(self.sdf_points)])
+        self.sdfs = torch.cat([torch.zeros(self.pcd_num, 1), self.sdf_sdfs])
+        self.masks = torch.cat([torch.ones(self.pcd_num), torch.zeros(self.sdf_num)]).bool()
+
+        perm = torch.from_numpy(np.random.permutation(self.N))
+        self.points = self.points[perm]
+        self.normals = self.normals[perm]
+        self.sdfs = self.sdfs[perm]
+        self.masks = self.masks[perm]
+
+        self.points = (self.points + self.translate) * self.scale
+
+    def __getitem__(self, oid):
+        if self.i + 1 < self.length:
+            points = self.points[self.i * self.B:(self.i + 1) * self.B].cuda()
+            normals = self.normals[self.i * self.B:(self.i + 1) * self.B].cuda()
+            sdfs = self.sdfs[self.i * self.B:(self.i + 1) * self.B].cuda()
+            masks = self.masks[self.i * self.B:(self.i + 1) * self.B].cuda()
+            self.i += 1
+        else:
+            points = self.points[self.i * self.B:].cuda()
+            normals = self.normals[self.i * self.B:].cuda()
+            sdfs = self.sdfs[self.i * self.B:].cuda()
+            masks = self.masks[self.i * self.B:].cuda()
+            self.i = 0
+            # self.perm()
+        return points, normals, sdfs, masks
+
+
 class Triplane(nn.Module):
     def __init__(self,
                  n=1,
@@ -103,42 +185,31 @@ class Triplane(nn.Module):
         # assert len(self.objname) == n
         if init_type == "geo_init":
             sdf_proxy = nn.Sequential(
-                nn.Linear(3, channel), nn.ReLU(),
+                nn.Linear(3, channel), nn.Softplus(beta=100),
                 nn.Linear(channel, channel),
             )
             torch.nn.init.constant_(sdf_proxy[0].bias, 0.0)
-            # torch.nn.init.normal_(sdf_proxy[0].weight, 0.0, np.sqrt(2) / np.sqrt(channel))
-            torch.nn.init.kaiming_normal_(sdf_proxy[0].weight, a=0, mode='fan_out', nonlinearity='relu')
+            torch.nn.init.normal_(sdf_proxy[0].weight, 0.0, np.sqrt(2) / np.sqrt(channel))
             torch.nn.init.constant_(sdf_proxy[2].bias, 0.0)
-            # torch.nn.init.normal_(sdf_proxy[2].weight, 0.0, np.sqrt(2) / np.sqrt(channel))
-            torch.nn.init.kaiming_normal_(sdf_proxy[2].weight, a=0, mode='fan_out', nonlinearity='relu')
+            torch.nn.init.normal_(sdf_proxy[2].weight, 0.0, np.sqrt(2) / np.sqrt(channel))
 
             ini_sdf = torch.zeros([3, channel, reso, reso])
-            # create XY, XZ, YZ planes grid coordinates to initialize the triplane's weights
-            # since grid_sample expects the input to be in the range [-1, 1]
-            # we create a grid of points in the range [-1, 1] for each plane
             X = torch.linspace(-1.0, 1.0, reso)
             (U, V) = torch.meshgrid(X, X, indexing="ij")
             Z = torch.zeros(reso, reso)
             inputx = torch.stack([Z, U, V], -1).reshape(-1, 3)
             inputy = torch.stack([U, Z, V], -1).reshape(-1, 3)
             inputz = torch.stack([U, V, Z], -1).reshape(-1, 3)
-            # use permute to make the channel dimension as first dimension, batch size as second dimension
-            # and reshape back to grid format
             ini_sdf[0] = sdf_proxy(inputx).permute(1, 0).reshape(channel, reso, reso)
             ini_sdf[1] = sdf_proxy(inputy).permute(1, 0).reshape(channel, reso, reso)
             ini_sdf[2] = sdf_proxy(inputz).permute(1, 0).reshape(channel, reso, reso)
-            # unsqueeze and repeat command just add a new dim and repeat n times at the 1st dim
+
             self.triplane = torch.nn.Parameter(ini_sdf.unsqueeze(0).repeat(self.n, 1, 1, 1, 1) / 3, requires_grad=True)
         elif init_type == "zero_init":
             self.triplane = torch.nn.Parameter(torch.zeros([self.n, 3, channel, reso, reso]), requires_grad=True)
 
         self.R = reso
         self.C = channel
-        # construct the matrix to project points onto the three planes
-        # but the basis vectors are actually used to project from 2D space to 3D space
-        # so, we will get the inverse of the matrix later to project from 3D space to 2D space
-        # three matrices are used to project points onto the XY, XZ, and YZ planes respectively
         self.register_buffer("plane_axes", torch.tensor(
             [[[0, 1, 0],
               [1, 0, 0],
@@ -154,32 +225,13 @@ class Triplane(nn.Module):
         # xy xz yz
 
     def project_onto_planes(self, xyz):
-        # xyz shape: [sample_batch_size, 3 (xyz coords)]
         M, _ = xyz.shape
-        # expand xyz 3 times at the first dimension, possibly for all 3 triplanes
         xyz = xyz.unsqueeze(0).expand(3, -1, -1).reshape(3, M, 3)
-        # since we are projecting from 3D space to 2D space,
-        # get the inverse of the projection matrix (plane_axes)
         inv_planes = torch.linalg.inv(self.plane_axes).reshape(3, 3, 3)
-        # inv_planes:
-        # [[[0., 1., 0.],
-        #  [1., 0., 0.],
-        #  [0., 0., 1.]],
-        # [[0., 1., 0.],
-        #  [0., 0., 1.],
-        #  [1., 0., 0.]],
-        # [[0., 0., 1.],
-        #  [1., 0., 0.],
-        #  [0., 1., 0.]]]
-        # then get the product of the input points and the inverse projection matrix
         projections = torch.bmm(xyz, inv_planes)
-        # projections[0,:,2] stores [y_in_org_3D_space, x_in_org_3D_space]
-        # projections[1,:,2] stores [z_in_org_3D_space, x_in_org_3D_space]
-        # projections[2,:,2] stores [y_in_org_3D_space, z_in_org_3D_space]
         return projections[..., :2]  # [3, M, 2]
 
     def forward(self, xyz, oid):
-        # xyz shape: [sample_batch_size, 3 (xyz coords)]
         # pts: [M,3]
         M, _ = xyz.shape
         plane_features = self.triplane[oid:oid + 1].view(3, self.C, self.R, self.R)
@@ -209,7 +261,8 @@ class Network(nn.Module):
                  d_out=6,
                  init_type="geo_init",
                  weight_norm=True,
-                 bias=0.5
+                 bias=0.5,
+                 inside_outside=False
                  ):
         super().__init__()
         dims = [d_in] + [d_hid for _ in range(n_layers)] + [d_out]
@@ -221,45 +274,44 @@ class Network(nn.Module):
             lin = nn.Linear(in_dim, out_dim)
 
             if init_type == "geo_init":
-                # last layer use different init strategy (xavier)
                 if l == self.num_layers - 2:
-                    torch.nn.init.xavier_normal_(lin.weight)
-                    # TODO: why original implementation only initialize last layer's bias as bias?
-                    # (because hidden layer initialize as 0.0)
-                    torch.nn.init.constant_(lin.bias, bias)
-                # use kaiming init for hidden layers (which is suitable for ReLU)
+                    if not inside_outside:
+                        torch.nn.init.normal_(lin.weight, mean=np.sqrt(np.pi) / np.sqrt(in_dim), std=0.0001)
+                        torch.nn.init.constant_(lin.bias, -bias)
+                    else:
+                        torch.nn.init.normal_(lin.weight, mean=-np.sqrt(np.pi) / np.sqrt(in_dim), std=0.0001)
+                        torch.nn.init.constant_(lin.bias, bias)
                 else:
-                    torch.nn.init.kaiming_normal_(lin.weight, a=0, mode='fan_out', nonlinearity='relu')
                     torch.nn.init.constant_(lin.bias, 0.0)
+                    torch.nn.init.normal_(lin.weight, 0.0, np.sqrt(2) / np.sqrt(out_dim))
+
             if weight_norm:
                 lin = nn.utils.weight_norm(lin)
 
-            # use setattr to dynamically create member variables of the class
-            # e.g. setattr(self, "lin0", lin) for the first layer
             setattr(self, "lin" + str(l), lin)
 
-        self.activation = nn.ReLU()
+        self.activation = nn.Softplus(beta=100)
 
     def forward(self, feats):
         x = feats
         for l in range(0, self.num_layers - 1):
-            # get corresponding linear layer and apply it
             lin = getattr(self, "lin" + str(l))
             x = lin(x)
-            # apply activation function for hidden layers
             if l < self.num_layers - 2:
                 x = self.activation(x)
         return x
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--config', type=str, default='base_timevarying.json')
+parser.add_argument('--config', type=str, default='base.json')
+parser.add_argument('--gpu', type=int, default=0)
 args = parser.parse_args()
 
+torch.cuda.set_device(f"cuda:{args.gpu}")
 with open(args.config, 'r') as f:
     config = json.load(f)
 config = edict(config)
-# assert len(config.fixmlp) > 0
+assert len(config.fixmlp) > 0
 
 net = Network(
     d_in=config.channel,
@@ -268,9 +320,12 @@ net = Network(
     d_out=config.n_labels,
     init_type="geo_init",
 ).cuda()
-# net.load_state_dict(torch.load(config.fixmlp, map_location='cuda'))
+net.load_state_dict(torch.load(config.fixmlp, map_location='cuda'))
 
-# TODO: instantiate multiple triplanes (each timestep has its own triplane)
+dataset = CropDataset(
+    config
+)
+
 triplane = Triplane(
     reso=config.resolution // (2 ** len(config.c2f_scale)),
     channel=config.channel,
@@ -278,67 +333,96 @@ triplane = Triplane(
     objname=None,
 ).cuda()
 
-optimizer = create_optimizer(net, triplane, config)
+optimizer = create_optimizer(None, triplane, config)
 
-# prepare dataset
-# TODO: tweak to let dataloader return both raw data and timesteps
-train_dataloader = torch.utils.data.DataLoader(
-    SampleTimevaryingDataset(
-        raw_data_prefix="/media/data/qadwu/volume/vortices",
-        raw_data_filename_without_timestep="vorts",
-        file_ext="data",
-        res=[128, 128, 128],
-        n_timesteps=1,
-        # n_timesteps=90,
-        n_channels=1,
-        sample_batch_size= 2**10
-    ),
-    # batch_size=config.batch_size,
-    batch_size=1,
-    shuffle=True)
-# TODO: value range should be retrieve from SampleTimevaryingDataset class (which is more reasonable)
-value_range = 1.0
+max_len = dataset.length
 
+eps_s = 1e-6
+eps_v = 1e-6
+w_eik = config.w_eik
+w_nor = config.w_nor
+w_sur = config.w_sur
+w_sdf = config.w_sdf
 for epoch in tqdm(range(1, config.max_iters + 1)):
-    
-    running_loss = 0.0
-    total_elems = 0
-    
+    eik_loss_list = []
+    nor_loss_list = []
+    sur_loss_list = []
+    sdf_loss_list = []
     loss_list = []
+
+    if epoch % 20 == 0:
+        dataset.perm()
 
     if epoch in config.c2f_scale:
         new_reso = int(config.resolution / (2 ** (len(config.c2f_scale) - config.c2f_scale.index(epoch) - 1)))
         triplane.update_resolution(new_reso)
-        optimizer = create_optimizer(net, triplane, config)
+        optimizer = create_optimizer(None, triplane, config)
         update_lr(optimizer, epoch - 1, config)
         torch.cuda.empty_cache()
 
-    for batch_idx, data in enumerate(train_dataloader):
-        # raw_data format: tuple(timestep_index, sample_coords, target_values)
-        sample_coords = data[1]
-        targets = data[2]
-        # TODO: need to reshape raw_data to fit the input shape of the triplane
-        # TODO: first try training only one timestep volumes on triplane
-        # Maybe load a single timestep volume indivisually and randonly permute the points as input?
-        # TODO: each timestep volume goes to its corresponding triplane here
-        # so only extract one timestep volume from sample_coords (i.e., sample_coords[0])
-        sample_coords = sample_coords[0]
-        output = net(triplane(sample_coords, 0))
-        loss = F.mse_loss(output.flatten(), targets.flatten())
+    for _ in range(max_len):
+        points, normals, sdfs, masks = dataset[0]
+        gt_normals = normals[masks]
+        gt_sdfs = sdfs[~masks]
+
+        mnfd_points = points[masks]
+        unif_points = points[~masks]
+        len_mnfd = mnfd_points.shape[0]
+        len_unif = unif_points.shape[0]
+        bkpt = [len_mnfd * k for k in range(6)] + [len_mnfd * 6 + len_unif * k for k in range(7)]
+        rndm_points = torch.from_numpy(np.random.uniform(-1., 1., size=(len_unif, 3)).astype(np.float32)).cuda()
+
+        points_all = torch.cat([
+            mnfd_points + torch.as_tensor([[eps_s, 0.0, 0.0]]).to(points),
+            mnfd_points + torch.as_tensor([[-eps_s, 0.0, 0.0]]).to(points),
+            mnfd_points + torch.as_tensor([[0.0, eps_s, 0.0]]).to(points),
+            mnfd_points + torch.as_tensor([[0.0, -eps_s, 0.0]]).to(points),
+            mnfd_points + torch.as_tensor([[0.0, 0.0, eps_s]]).to(points),
+            mnfd_points + torch.as_tensor([[0.0, 0.0, -eps_s]]).to(points),
+            rndm_points + torch.as_tensor([[eps_v, 0.0, 0.0]]).to(points),
+            rndm_points + torch.as_tensor([[-eps_v, 0.0, 0.0]]).to(points),
+            rndm_points + torch.as_tensor([[0.0, eps_v, 0.0]]).to(points),
+            rndm_points + torch.as_tensor([[0.0, -eps_v, 0.0]]).to(points),
+            rndm_points + torch.as_tensor([[0.0, 0.0, eps_v]]).to(points),
+            rndm_points + torch.as_tensor([[0.0, 0.0, -eps_v]]).to(points),
+            points,
+        ], dim=0)  # [N,3]
+
+        sdfs_all = net(triplane(points_all, 0))  # [N*, L]
+        pred_sdfs = sdfs_all[bkpt[12]:]  # [N, L]
+        mnfd_grad = torch.cat([
+            0.5 * (sdfs_all[bkpt[0]:bkpt[1]] - sdfs_all[bkpt[1]:bkpt[2]]) / eps_s,
+            0.5 * (sdfs_all[bkpt[2]:bkpt[3]] - sdfs_all[bkpt[3]:bkpt[4]]) / eps_s,
+            0.5 * (sdfs_all[bkpt[4]:bkpt[5]] - sdfs_all[bkpt[5]:bkpt[6]]) / eps_s,
+        ], dim=-1)
+        rndm_grad = torch.stack([
+            0.5 * (sdfs_all[bkpt[6]:bkpt[7]] - sdfs_all[bkpt[7]:bkpt[8]]) / eps_v,
+            0.5 * (sdfs_all[bkpt[8]:bkpt[9]] - sdfs_all[bkpt[9]:bkpt[10]]) / eps_v,
+            0.5 * (sdfs_all[bkpt[10]:bkpt[11]] - sdfs_all[bkpt[11]:bkpt[12]]) / eps_v,
+        ], dim=-1)
+
+        # loss
+        eik_loss = ((rndm_grad.norm(2, dim=-1) - 1) ** 2).mean()
+        nor_loss = (mnfd_grad - gt_normals).norm(2, dim=1).mean()
+        sur_loss = pred_sdfs[masks].abs().mean()
+        sdf_loss = (pred_sdfs[~masks] - gt_sdfs).abs().mean()
+
+        loss = eik_loss * w_eik + nor_loss * w_nor + sur_loss * w_sur + sdf_loss * w_sdf
+        eik_loss_list.append(eik_loss.item())
+        nor_loss_list.append(nor_loss.item())
+        sur_loss_list.append(sur_loss.item())
+        sdf_loss_list.append(sdf_loss.item())
+        loss_list.append(loss.item())
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        
-        running_loss += loss.item() * sample_coords.shape[0]
-        total_elems += sample_coords.shape[0]
-        
-    avg_loss = running_loss / total_elems
-    loss_list.append(avg_loss)
-    print(f"Epoch {epoch}, Loss: {avg_loss}, , Reconstruction PSNR: {(20 * torch.log10(value_range / torch.sqrt(loss))):0,.4f}")
+
+    if epoch % config.i_print == 0:
+        print(
+            f"L={np.mean(loss_list):.4f}, Leik={np.mean(eik_loss_list):.4f}, Lnor={np.mean(nor_loss_list):.4f}, Lsur={np.mean(sur_loss_list):.4f}, Lsdf={np.mean(sdf_loss_list):.4f}")
 
     update_lr(optimizer, epoch, config)
 
-# vis_model(net, triplane, config.n_labels, '.')
-# save_model(net, triplane, '.')
-
+vis_model(net, triplane, config.n_labels, '.')
+save_model(net, triplane, '.')

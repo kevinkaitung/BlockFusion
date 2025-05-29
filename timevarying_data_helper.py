@@ -40,6 +40,85 @@ class TimevaryingDataset(torch.utils.data.Dataset):
         return self.n_timesteps
 
 
+class SampleTimevaryingDataset(torch.utils.data.Dataset):
+    def __init__(
+        self, raw_data_prefix, raw_data_filename_without_timestep, file_ext, res, n_timesteps, n_channels,
+        sample_batch_size=2**10
+    ):
+        self.volumes = []
+        self.n_timesteps = n_timesteps
+        self.n_channels = n_channels
+        self.res = res
+        self.sample_batch_size = sample_batch_size
+        for i in range(n_timesteps):
+            with open(os.path.join(raw_data_prefix, raw_data_filename_without_timestep+str(i+1)+'.'+file_ext), "rb") as f:
+                # f.seek(offset * np.dtype(dtype).itemsize)
+                # only read the chunk of the data assigned by the shape
+                volume = np.frombuffer(f.read(res[0] * res[1] * res[2] * n_channels * np.dtype(np.float32).itemsize), dtype=np.float32)
+                # cast volume data into float32
+                # TODO: (the order of res to put into reshape should double check)
+                # temporarily ignore since its the cube volume
+                volume = volume.astype(np.float32).reshape([res[2], res[1], res[0], n_channels])
+                # convert to torch tensor
+                volume = torch.from_numpy(volume).cuda()
+                # normalize the volume data
+                volume = (volume - volume.min()) / (volume.max() - volume.min())
+                self.volumes.append(volume)
+        self.volumes = torch.stack(self.volumes, dim=0)
+        # permute the dimensions to match the expected input shape
+        self.volumes = self.volumes.permute(0, 4, 1, 2, 3)  # (n_timesteps, n_channels, res[2], res[1], res[0])
+    
+    def __getitem__(self, index):
+        # generate random coordinates
+        sample_coords = torch.rand([self.sample_batch_size, 3], dtype=torch.float32).cuda()
+        # get targets value from the volume at specified timestep
+        targets = self.sample(index, sample_coords)
+        return index, sample_coords, targets
+
+    def __len__(self):
+        return self.n_timesteps
+
+    # sample a batch of data from the volume at index timestep
+    def sample(self, index, input):
+        with torch.no_grad():
+            # Bilinearly filtered lookup from the image. Not super fast,
+            # but less than ~20% of the overall runtime of this example.
+            shape = self.res
+
+            input = input * torch.tensor([shape[0] - 1, shape[1] - 1, shape[2] - 1], device=input.device).float()
+            indices = input.long()
+            lerp_weights = input - indices.float()
+
+            x0 = indices[:, 0].clamp(min=0, max=shape[0] - 1)
+            y0 = indices[:, 1].clamp(min=0, max=shape[1] - 1)
+            z0 = indices[:, 2].clamp(min=0, max=shape[2] - 1)
+            x1 = (x0 + 1).clamp(max=shape[0] - 1)
+            y1 = (y0 + 1).clamp(max=shape[1] - 1)
+            z1 = (z0 + 1).clamp(max=shape[2] - 1)
+
+            # get the volumes at the specified timestep
+            # since we only have one channel (scalar field)
+            # just use the first channel (index = 0 at second dimension)
+            c000 = self.volumes[index, 0][x0, y0, z0]
+            c010 = self.volumes[index, 0][x0, y1, z0]
+            c100 = self.volumes[index, 0][x1, y0, z0]
+            c110 = self.volumes[index, 0][x1, y1, z0]
+            c001 = self.volumes[index, 0][x0, y0, z1]
+            c011 = self.volumes[index, 0][x0, y1, z1]
+            c101 = self.volumes[index, 0][x1, y0, z1]
+            c111 = self.volumes[index, 0][x1, y1, z1]
+
+            # Trilinear interpolation
+            return ((1 - lerp_weights[:,0]) * (1 - lerp_weights[:,1]) * (1 - lerp_weights[:,2]) * c000
+                +   (1 - lerp_weights[:,0]) *      lerp_weights[:,1] *  (1 - lerp_weights[:,2]) * c010
+                +        lerp_weights[:,0] *  (1 - lerp_weights[:,1]) * (1 - lerp_weights[:,2]) * c100
+                +        lerp_weights[:,0] *       lerp_weights[:,1] *  (1 - lerp_weights[:,2]) * c110
+                +   (1 - lerp_weights[:,0]) * (1 - lerp_weights[:,1]) *      lerp_weights[:,2] * c001
+                +   (1 - lerp_weights[:,0]) *      lerp_weights[:,1] *       lerp_weights[:,2] * c011
+                +        lerp_weights[:,0] *  (1 - lerp_weights[:,1]) *      lerp_weights[:,2] * c101
+                +        lerp_weights[:,0] *       lerp_weights[:,1] *       lerp_weights[:,2] * c111)
+
+
 class EncodingWeightDataset(torch.utils.data.Dataset):
     def __init__(
         self, pretrained_weights_info, level
