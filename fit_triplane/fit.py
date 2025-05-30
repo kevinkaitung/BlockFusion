@@ -271,7 +271,7 @@ net = Network(
 # net.load_state_dict(torch.load(config.fixmlp, map_location='cuda'))
 
 n_timesteps = 90
-# TODO: instantiate multiple triplanes (each timestep has its own triplane)
+# instantiate multiple triplanes (each timestep has its own triplane)
 triplane = [Triplane(
     reso=config.resolution // (2 ** len(config.c2f_scale)),
     channel=config.channel,
@@ -291,20 +291,17 @@ train_dataloader = torch.utils.data.DataLoader(
         file_ext="data",
         res=[128, 128, 128],
         n_timesteps=n_timesteps,
-        # n_timesteps=90,
         n_channels=1,
         sample_batch_size= 2**10
     ),
-    batch_size=n_timesteps,
-    # batch_size=1,
-    shuffle=False)
+    batch_size=config.batch_size,
+    shuffle=True)
 # TODO: value range should be retrieve from SampleTimevaryingDataset class (which is more reasonable)
 value_range = 1.0
 
 for epoch in tqdm(range(1, config.max_iters + 1)):
     
     running_loss = torch.tensor(0.0).cuda()
-    total_elems = 0
     
     loss_list = []
 
@@ -317,31 +314,35 @@ for epoch in tqdm(range(1, config.max_iters + 1)):
         torch.cuda.empty_cache()
 
     for batch_idx, data in enumerate(train_dataloader):
-        # raw_data format: tuple(timestep_index, sample_coords, target_values)
-        sample_coords = data[1]
+        # data format: tuple(timestep_index, sample_coords, target_values)
+        outputs = []
         targets = data[2]
-        # TODO: need to reshape raw_data to fit the input shape of the triplane
-        # TODO: first try training only one timestep volumes on triplane
-        # Maybe load a single timestep volume indivisually and randonly permute the points as input?
-        # TODO: each timestep volume goes to its corresponding triplane here
-        # so only extract one timestep volume from sample_coords (i.e., sample_coords[0])
-        for i, tri in enumerate(triplane):
-            input_coords = sample_coords[i]
-            output = net(tri(input_coords, 0))
-            loss = F.mse_loss(output.flatten(), targets[i].flatten())
-
-            running_loss += loss
-            # total_elems += input_coords.shape[0]
+        for timestep, sample_coords in zip(data[0], data[1]):
+            outputs.append(net(triplane[timestep](sample_coords, 0)))
+        # outputs[0].shape = [1024, 1]
+        outputs = torch.stack(outputs, dim=0)
+        # outputs.shape = [90, 1024, 1]
+        outputs = outputs.squeeze(2)
+        # outputs.shape = [90, 1024]
+        # targets.shape = [90, 1024]        
+        loss = F.mse_loss(outputs, targets)
         
         optimizer.zero_grad()
-        running_loss.backward()
+        loss.backward()
         optimizer.step()
         
-    avg_loss = running_loss / n_timesteps
+        running_loss += loss
+        
+    avg_loss = running_loss / len(train_dataloader)
     loss_list.append(avg_loss)
     print(f"Epoch {epoch}, Loss: {avg_loss}, , Reconstruction PSNR: {(20 * torch.log10(value_range / torch.sqrt(avg_loss))):0,.4f}")
 
     update_lr(optimizer, epoch, config)
+
+torch.save({
+                'net_state_dict': net.state_dict(),
+                'triplane_state_dict': triplane.state_dict(),
+            }, "saved_model.ckpt")
 
 # vis_model(net, triplane, config.n_labels, '.')
 # save_model(net, triplane, '.')
