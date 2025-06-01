@@ -70,6 +70,7 @@ class SampleTimevaryingDataset(torch.utils.data.Dataset):
     
     def __getitem__(self, index):
         # generate random coordinates
+        # sample_coords: [x_coords, y_coords, z_coords]
         sample_coords = torch.rand([self.sample_batch_size, 3], dtype=torch.float32).cuda()
         # get targets value from the volume at specified timestep
         targets = self.sample(index, sample_coords)
@@ -99,14 +100,15 @@ class SampleTimevaryingDataset(torch.utils.data.Dataset):
             # get the volumes at the specified timestep
             # since we only have one channel (scalar field)
             # just use the first channel (index = 0 at second dimension)
-            c000 = self.volumes[index, 0][x0, y0, z0]
-            c010 = self.volumes[index, 0][x0, y1, z0]
-            c100 = self.volumes[index, 0][x1, y0, z0]
-            c110 = self.volumes[index, 0][x1, y1, z0]
-            c001 = self.volumes[index, 0][x0, y0, z1]
-            c011 = self.volumes[index, 0][x0, y1, z1]
-            c101 = self.volumes[index, 0][x1, y0, z1]
-            c111 = self.volumes[index, 0][x1, y1, z1]
+            # self.volumes require the access pattern to be [z_coord, y_coord, x_coord]
+            c000 = self.volumes[index, 0][z0, y0, x0]
+            c010 = self.volumes[index, 0][z0, y1, x0]
+            c100 = self.volumes[index, 0][z0, y0, x1]
+            c110 = self.volumes[index, 0][z0, y1, x1]
+            c001 = self.volumes[index, 0][z1, y0, x0]
+            c011 = self.volumes[index, 0][z1, y1, x0]
+            c101 = self.volumes[index, 0][z1, y0, x1]
+            c111 = self.volumes[index, 0][z1, y1, x1]
 
             # Trilinear interpolation
             return ((1 - lerp_weights[:,0]) * (1 - lerp_weights[:,1]) * (1 - lerp_weights[:,2]) * c000
