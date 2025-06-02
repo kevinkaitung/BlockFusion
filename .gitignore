@@ -1,3 +1,6 @@
 logs
 
 __pycache__
+
+*.ckpt
+*.bin
