@@ -251,99 +251,100 @@ class Network(nn.Module):
                 x = self.activation(x)
         return x
 
+if __name__ == "__main__":
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--config', type=str, default='base_timevarying.json')
-args = parser.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=str, default='base_timevarying.json')
+    args = parser.parse_args()
 
-with open(args.config, 'r') as f:
-    config = json.load(f)
-config = edict(config)
-# assert len(config.fixmlp) > 0
+    with open(args.config, 'r') as f:
+        config = json.load(f)
+    config = edict(config)
+    # assert len(config.fixmlp) > 0
 
-net = Network(
-    d_in=config.channel,
-    d_hid=config.n_hid,
-    n_layers=config.n_layers,
-    d_out=config.n_labels,
-    init_type="geo_init",
-).cuda()
-# net.load_state_dict(torch.load(config.fixmlp, map_location='cuda'))
+    net = Network(
+        d_in=config.channel,
+        d_hid=config.n_hid,
+        n_layers=config.n_layers,
+        d_out=config.n_labels,
+        init_type="geo_init",
+    ).cuda()
+    # net.load_state_dict(torch.load(config.fixmlp, map_location='cuda'))
 
-n_timesteps = 90
-# instantiate multiple triplanes (each timestep has its own triplane)
-triplane = [Triplane(
-    reso=config.resolution // (2 ** len(config.c2f_scale)),
-    channel=config.channel,
-    init_type="geo_init",
-    objname=None,
-).cuda() for _ in range(n_timesteps)]
-triplane = nn.ModuleList(triplane)
+    n_timesteps = 90
+    # instantiate multiple triplanes (each timestep has its own triplane)
+    triplane = [Triplane(
+        reso=config.resolution // (2 ** len(config.c2f_scale)),
+        channel=config.channel,
+        init_type="geo_init",
+        objname=None,
+    ).cuda() for _ in range(n_timesteps)]
+    triplane = nn.ModuleList(triplane)
 
-optimizer = create_optimizer(net, triplane, config)
+    optimizer = create_optimizer(net, triplane, config)
 
-# prepare dataset
-# TODO: tweak to let dataloader return both raw data and timesteps
-train_dataloader = torch.utils.data.DataLoader(
-    SampleTimevaryingDataset(
-        raw_data_prefix="/media/data/qadwu/volume/vortices",
-        raw_data_filename_without_timestep="vorts",
-        file_ext="data",
-        res=[128, 128, 128],
-        n_timesteps=n_timesteps,
-        n_channels=1,
-        sample_batch_size= 2**10
-    ),
-    batch_size=config.batch_size,
-    shuffle=True)
-# TODO: value range should be retrieve from SampleTimevaryingDataset class (which is more reasonable)
-value_range = 1.0
+    # prepare dataset
+    # TODO: tweak to let dataloader return both raw data and timesteps
+    train_dataloader = torch.utils.data.DataLoader(
+        SampleTimevaryingDataset(
+            raw_data_prefix="/media/data/qadwu/volume/vortices",
+            raw_data_filename_without_timestep="vorts",
+            file_ext="data",
+            res=[128, 128, 128],
+            n_timesteps=n_timesteps,
+            n_channels=1,
+            sample_batch_size= 2**10
+        ),
+        batch_size=config.batch_size,
+        shuffle=True)
+    # TODO: value range should be retrieve from SampleTimevaryingDataset class (which is more reasonable)
+    value_range = 1.0
 
-for epoch in tqdm(range(1, config.max_iters + 1)):
-    
-    running_loss = torch.tensor(0.0).cuda()
-    
-    loss_list = []
-
-    if epoch in config.c2f_scale:
-        new_reso = int(config.resolution / (2 ** (len(config.c2f_scale) - config.c2f_scale.index(epoch) - 1)))
-        for tri in triplane:
-            tri.update_resolution(new_reso)
-        optimizer = create_optimizer(net, triplane, config)
-        update_lr(optimizer, epoch - 1, config)
-        torch.cuda.empty_cache()
-
-    for batch_idx, data in enumerate(train_dataloader):
-        # data format: tuple(timestep_index, sample_coords, target_values)
-        outputs = []
-        targets = data[2]
-        for timestep, sample_coords in zip(data[0], data[1]):
-            outputs.append(net(triplane[timestep](sample_coords, 0)))
-        # outputs[0].shape = [1024, 1]
-        outputs = torch.stack(outputs, dim=0)
-        # outputs.shape = [90, 1024, 1]
-        outputs = outputs.squeeze(2)
-        # outputs.shape = [90, 1024]
-        # targets.shape = [90, 1024]        
-        loss = F.mse_loss(outputs, targets)
+    for epoch in tqdm(range(1, config.max_iters + 1)):
         
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        running_loss = torch.tensor(0.0).cuda()
         
-        running_loss += loss
-        
-    avg_loss = running_loss / len(train_dataloader)
-    loss_list.append(avg_loss)
-    print(f"Epoch {epoch}, Loss: {avg_loss}, , Reconstruction PSNR: {(20 * torch.log10(value_range / torch.sqrt(avg_loss))):0,.4f}")
+        loss_list = []
 
-    update_lr(optimizer, epoch, config)
+        if epoch in config.c2f_scale:
+            new_reso = int(config.resolution / (2 ** (len(config.c2f_scale) - config.c2f_scale.index(epoch) - 1)))
+            for tri in triplane:
+                tri.update_resolution(new_reso)
+            optimizer = create_optimizer(net, triplane, config)
+            update_lr(optimizer, epoch - 1, config)
+            torch.cuda.empty_cache()
 
-torch.save({
-                'net_state_dict': net.state_dict(),
-                'triplane_state_dict': triplane.state_dict(),
-            }, "saved_model.ckpt")
+        for batch_idx, data in enumerate(train_dataloader):
+            # data format: tuple(timestep_index, sample_coords, target_values)
+            outputs = []
+            targets = data[2]
+            for timestep, sample_coords in zip(data[0], data[1]):
+                outputs.append(net(triplane[timestep](sample_coords, 0)))
+            # outputs[0].shape = [1024, 1]
+            outputs = torch.stack(outputs, dim=0)
+            # outputs.shape = [90, 1024, 1]
+            outputs = outputs.squeeze(2)
+            # outputs.shape = [90, 1024]
+            # targets.shape = [90, 1024]        
+            loss = F.mse_loss(outputs, targets)
+            
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
+            running_loss += loss
+            
+        avg_loss = running_loss / len(train_dataloader)
+        loss_list.append(avg_loss)
+        print(f"Epoch {epoch}, Loss: {avg_loss}, , Reconstruction PSNR: {(20 * torch.log10(value_range / torch.sqrt(avg_loss))):0,.4f}")
 
-# vis_model(net, triplane, config.n_labels, '.')
-# save_model(net, triplane, '.')
+        update_lr(optimizer, epoch, config)
+
+    torch.save({
+                    'net_state_dict': net.state_dict(),
+                    'triplane_state_dict': triplane.state_dict(),
+                }, "new_saved_model.ckpt")
+
+    # vis_model(net, triplane, config.n_labels, '.')
+    # save_model(net, triplane, '.')
 
