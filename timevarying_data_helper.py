@@ -195,6 +195,9 @@ class LatentWeightDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return self.n_params
+    
+    def get_value_range(self):
+        return self.latent_weights.min().item(), self.latent_weights.max().item()
 
 if __name__ == "__main__":
     dataset = TimevaryingDataset(

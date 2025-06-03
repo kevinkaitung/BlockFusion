@@ -1434,7 +1434,7 @@ class VAE(nn.Module):
         # feature size:  16,    8,   4,   8,    16,  32,  64
 
         self.in_layer = nn.Sequential(ResBlock_g(
-            32,
+            plane_shape[1],
             dropout=0,
             out_channels=128,
             use_conv=True,
