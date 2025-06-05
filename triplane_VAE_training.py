@@ -111,12 +111,12 @@ if __name__ == "__main__":
     vae_model = VAE(vae_config).cuda()
     
     n_timesteps = 90
-    batch_size = 5
+    batch_size = 6
     init_lr = 0.001
-    lr_decay = 1000
+    lr_decay = 500
     lr_gamma = 0.5
-    epoch = 5000
-    ckpt_freq = 6000
+    epoch = 1500
+    ckpt_freq = 500
     expname = "triplane_initial_exp"
     
     # create directory for saving logs
@@ -140,7 +140,7 @@ if __name__ == "__main__":
     console_logger.setLevel(logging.DEBUG)
 
     # load pretrained tri-plane here
-    loaded_model = torch.load("fit_triplane/new_saved_model.ckpt")
+    loaded_model = torch.load("fit_triplane/ch_64_saved_model.ckpt")
     triplane_weights = [loaded_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_timesteps)]
     triplane_weights = torch.cat(triplane_weights, dim=0)
     # TODO: check whether it makes sense to pass vae_config["plane_shape"] into LatentWeightDataset
@@ -167,4 +167,4 @@ if __name__ == "__main__":
     optimizer = torch.optim.Adam(vae_model.parameters(), lr=init_lr)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_decay, gamma=lr_gamma)
     
-    train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_decay, lr_gamma, epoch, tensorboard_writer, console_logger, os.getcwd(), ckpt_freq, 0)
+    train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_decay, lr_gamma, epoch, tensorboard_writer, console_logger, run_dir, ckpt_freq, 0)
