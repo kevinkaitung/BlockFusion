@@ -7,6 +7,7 @@ import numpy as np
 import os, sys
 import json
 from fit import Triplane, Network
+import matplotlib.pyplot as plt
 
 # Add parent directory to sys.path
 # TODO: make it more flexible to call timevarying_data_helper anywhere
@@ -60,7 +61,10 @@ if __name__ == "__main__":
     # TODO: value range should be retrieve from SampleTimevaryingDataset class (which is more reasonable)
     value_range = 1.0
 
-    loaded_model = torch.load("new_saved_model.ckpt")
+    # loaded_model = torch.load("ch_64_saved_model.ckpt")
+    # loaded_model = torch.load("../VAE_Reconstructed_triplane.pt")
+    # loaded_model = torch.load("../Diffusion_Reconstructed_triplane.pt")
+    loaded_model = torch.load("../VAE_Reconstructed_triplane_ch_32.pt")
     net.load_state_dict(loaded_model['net_state_dict'])
     triplane.load_state_dict(loaded_model['triplane_state_dict'])
 
@@ -95,3 +99,14 @@ if __name__ == "__main__":
     for i in range(len(psnr_list)):
         print(f"timestep {i} - PSNR: {psnr_list[i]}")
         # print(psnr_list[i], ssim_list[i])
+    # After the PSNR printing loop, add:
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(len(psnr_list)), psnr_list, label='PSNR')
+    plt.xlabel('Timestep')
+    plt.ylabel('PSNR (dB)')
+    plt.title('PSNR across Timesteps')
+    plt.grid(True)
+    plt.legend()
+    plt.savefig('psnr_plot.png')
+    plt.close()
