@@ -10,6 +10,7 @@ import torch
 import numpy as np
 import os, sys
 import json
+from visualize_triplane import plot_single_channel
 
 # Add parent directory to sys.path
 # TODO: make it more flexible to call timevarying_data_helper anywhere
@@ -176,7 +177,9 @@ class Triplane(nn.Module):
         # projections[0,:,2] stores [y_in_org_3D_space, x_in_org_3D_space]
         # projections[1,:,2] stores [z_in_org_3D_space, x_in_org_3D_space]
         # projections[2,:,2] stores [y_in_org_3D_space, z_in_org_3D_space]
-        return projections[..., :2]  # [3, M, 2]
+        # since grid_sample expects input grid values in the range [-1, 1]
+        # normalize from [0, 1] to [-1, 1]
+        return 2.0 * projections[..., :2] - 1.0  # [3, M, 2]
 
     def forward(self, xyz, oid):
         # xyz shape: [sample_batch_size, 3 (xyz coords)]
@@ -306,8 +309,24 @@ if __name__ == "__main__":
         
         loss_list = []
 
+        # for debugging
+        if epoch % 2000 == 0:
+            for dim in range(3):
+                plot_single_channel(
+                    triplane[50].triplane[0][dim][16].detach(), 
+                    title=f"plane_dim_{dim}_epoch_{epoch}",
+                    save_path=f"plane_dim_{dim}_epoch_{epoch}.png"
+                )
+
         if epoch in config.c2f_scale:
             new_reso = int(config.resolution / (2 ** (len(config.c2f_scale) - config.c2f_scale.index(epoch) - 1)))
+            # for debugging
+            for dim in range(3):
+                plot_single_channel(
+                    triplane[50].triplane[0][dim][16].detach(), 
+                    title=f"plane_dim_{dim}_reso_{new_reso}",
+                    save_path=f"plane_dim_{dim}_reso_{new_reso}.png"
+                )
             for tri in triplane:
                 tri.update_resolution(new_reso)
             optimizer = create_optimizer(net, triplane, config)
