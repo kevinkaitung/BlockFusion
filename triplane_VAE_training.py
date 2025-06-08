@@ -9,6 +9,7 @@ from datetime import datetime
 
 from autoencoder_2D_origin import VAE
 from timevarying_data_helper import LatentWeightDataset
+from fit_triplane.visualize_triplane import plot_single_channel
 
 # redefinition of traning pipeline for multiple input volumes
 def train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_decay, lr_gamma, epochs=100, tensorboard_writer=None, console_logger=None, run_dir=None, ckpt_freq=100, resume_epoch=0):
@@ -37,6 +38,10 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_dec
             # But loss would become NaN, so disable it for now
             with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=False):
                 output = vae_model(raw_data)
+                # for debugging
+                # if epoch == 5 and batch_idx == 0:
+                #     import pdb; pdb.set_trace()
+                #     plot_single_channel(output[0][0][0][0], f"epoch{epoch}_batch{batch_idx}", save_path=f"epoch{epoch}_batch{batch_idx}")
                 # reconstructed results is the first element of the output (output[0])
                 recon_loss = F.mse_loss(output[0], raw_data)
                 kl_loss = vae_model.loss_function(*output)
@@ -104,20 +109,20 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_dec
 if __name__ == "__main__":
     vae_config = {"kl_std": 0.25,
                   "kl_weight": 0.001,
-                  "plane_shape": [3, 64, 128, 128],
+                  "plane_shape": [3, 32, 128, 128],
                   "z_shape": [4, 32, 32],
                   "num_heads": 16,
                   "transform_depth": 1}
     vae_model = VAE(vae_config).cuda()
     
     n_timesteps = 90
-    batch_size = 6
-    init_lr = 0.001
-    lr_decay = 500
+    batch_size = 8
+    init_lr = 0.0001
+    lr_decay = 300
     lr_gamma = 0.5
     epoch = 1500
     ckpt_freq = 500
-    expname = "triplane_initial_exp"
+    expname = "triplane_VAE_ch_32"
     
     # create directory for saving logs
     base_dir = "./logs"
@@ -140,7 +145,7 @@ if __name__ == "__main__":
     console_logger.setLevel(logging.DEBUG)
 
     # load pretrained tri-plane here
-    loaded_model = torch.load("fit_triplane/ch_64_saved_model.ckpt")
+    loaded_model = torch.load("fit_triplane/ch_32_saved_model.ckpt")
     triplane_weights = [loaded_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_timesteps)]
     triplane_weights = torch.cat(triplane_weights, dim=0)
     # TODO: check whether it makes sense to pass vae_config["plane_shape"] into LatentWeightDataset

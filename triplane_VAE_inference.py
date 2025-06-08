@@ -13,19 +13,19 @@ from timevarying_data_helper import LatentWeightDataset
 if __name__ == "__main__":
     vae_config = {"kl_std": 0.25,
                   "kl_weight": 0.001,
-                  "plane_shape": [3, 64, 128, 128],
+                  "plane_shape": [3, 32, 128, 128],
                   "z_shape": [4, 32, 32],
                   "num_heads": 16,
                   "transform_depth": 1}
     # TODO: should receive arguments to specify the location of pretrained model and other arguments
     vae_model = VAE(vae_config).cuda()
-    pretrained_vae_model = torch.load("logs/triplane_initial_exp/20250603-003002/vae_model_epoch_1499.ckpt")
+    pretrained_vae_model = torch.load("logs/triplane_VAE_ch_32/20250608-002620/vae_model_epoch_499.ckpt")
     vae_model.load_state_dict(pretrained_vae_model['model_state_dict'])
     
     n_timesteps = 90
     
     # load pretrained tri-plane here
-    loaded_model = torch.load("fit_triplane/ch_64_saved_model.ckpt")
+    loaded_model = torch.load("fit_triplane/ch_32_saved_model.ckpt")
     triplane_weights = [loaded_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_timesteps)]
     triplane_weights = torch.cat(triplane_weights, dim=0)
     # TODO: check whether it makes sense to pass vae_config["plane_shape"] into LatentWeightDataset
@@ -63,4 +63,4 @@ if __name__ == "__main__":
             # import pdb; pdb.set_trace()
             loaded_model['triplane_state_dict'][f"{batch_idx}.triplane"] = output[0]
     
-    torch.save(loaded_model, "VAE_Reconstructed_triplane.pt")
+    torch.save(loaded_model, "VAE_Reconstructed_triplane_ch_32.pt")
