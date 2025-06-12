@@ -7,7 +7,7 @@ import logging
 import argparse
 from datetime import datetime
 
-from autoencoder_2D_origin import VAE
+from autoencoder_2D_origin import VAE, VAE_no_KL
 from timevarying_data_helper import LatentWeightDataset
 
 if __name__ == "__main__":
@@ -18,8 +18,8 @@ if __name__ == "__main__":
                   "num_heads": 16,
                   "transform_depth": 1}
     # TODO: should receive arguments to specify the location of pretrained model and other arguments
-    vae_model = VAE(vae_config).cuda()
-    pretrained_vae_model = torch.load("logs/triplane_VAE_ch_32/20250608-002620/vae_model_epoch_499.ckpt")
+    vae_model = VAE_no_KL(vae_config).cuda()
+    pretrained_vae_model = torch.load("logs/triplane_VAE_ch_32/20250612-003423/vae_model_epoch_19999.ckpt")
     vae_model.load_state_dict(pretrained_vae_model['model_state_dict'])
     
     n_timesteps = 90
@@ -42,24 +42,26 @@ if __name__ == "__main__":
     min, max = train_dataloader.dataset.get_value_range()
     value_range = max - min
     # input_tensor = torch.randn(2, 3, 32, 128, 128).cuda()
-    input_tensor = next(iter(train_dataloader)).cuda()
+    input_tensor = next(iter(train_dataloader))[0].cuda()
     out = vae_model(input_tensor)
-    loss = vae_model.loss_function(*out)
-    print("loss: {}".format(loss))
+    # loss = vae_model.loss_function(*out)
+    # print("loss: {}".format(loss))
     print("z shape: {}".format(out[-1].shape))
     print("reconstruct shape: {}".format(out[0].shape))
-    samples = vae_model.sample(2)
-    print("samples shape: {}".format(samples[0].shape))
+    # samples = vae_model.sample(2)
+    # print("samples shape: {}".format(samples[0].shape))
     with torch.no_grad():
         for batch_idx, raw_data in enumerate(train_dataloader):
             
-            output = vae_model(raw_data)
+            output = vae_model(raw_data[0])
             # reconstructed results is the first element of the output (output[0])
-            recon_loss = F.mse_loss(output[0], raw_data)
-            kl_loss = vae_model.loss_function(*output)
-            loss = recon_loss + kl_loss
+            recon_loss = F.mse_loss(output[0], raw_data[0])
+            # kl_loss = vae_model.loss_function(*output)
+            # loss = recon_loss + kl_loss
+            loss = recon_loss
             
-            print(f"Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}")
+            # print(f"Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}")
+            print(f"Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}")
             # import pdb; pdb.set_trace()
             loaded_model['triplane_state_dict'][f"{batch_idx}.triplane"] = output[0]
     

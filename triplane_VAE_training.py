@@ -40,14 +40,21 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_dec
             # But loss would become NaN, so disable it for now
             with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=False):
                 output = vae_model(raw_data[0])
+                # output[0] = output[0].clamp(min, max)
                 # for debugging
-                if epoch % 10 == 0:
-                    if check_plane_idx in raw_data[1]:
+                if epoch % 10 == 0 or epoch < 10:
+                    # if check_plane_idx in raw_data[1]:
+                    #     # import pdb; pdb.set_trace()
+                    #     channel = 16
+                    #     for plane in range (3):
+                    #         # import pdb; pdb.set_trace()
+                    #         plot_single_channel(output[0][torch.where(raw_data[1] == check_plane_idx)[0].item()][plane][channel].detach(), f"epoch{epoch}_plane{plane}", save_path=f"epoch{epoch}_plane{plane}")
+                    channel = 16
+                    for plane in range (3):
+                    # for plane in range (1):
                         # import pdb; pdb.set_trace()
-                        channel = 16
-                        for plane in range (3):
-                            # import pdb; pdb.set_trace()
-                            plot_single_channel(output[0][torch.where(raw_data[1] == check_plane_idx)[0].item()][plane][channel].detach(), f"epoch{epoch}_plane{plane}", save_path=f"epoch{epoch}_plane{plane}")
+                        plot_single_channel(output[0][0][plane][channel].detach(), f"epoch{epoch}_plane{plane}", save_path=os.path.join(run_dir, f"epoch{epoch}_plane{plane}.png"))
+                    
                 # reconstructed results is the first element of the output (output[0])
                 recon_loss = F.mse_loss(output[0], raw_data[0])
                 # kl_loss = vae_model.loss_function(*output)
@@ -124,13 +131,14 @@ if __name__ == "__main__":
     vae_model = VAE_no_KL(vae_config).cuda()
     
     n_timesteps = 90
-    batch_size = 8
+    # batch_size = 8
+    batch_size = 1
     init_lr = 0.0001
-    lr_decay = 50
+    lr_decay = 2000
     lr_gamma = 0.5
-    epoch = 500
-    ckpt_freq = 100
-    expname = "triplane_VAE_ch_32"
+    epoch = 100
+    ckpt_freq = 200
+    expname = "triplane_VAE_ch_32_single_volume"
     
     # create directory for saving logs
     base_dir = "./logs"
@@ -161,9 +169,14 @@ if __name__ == "__main__":
     # Need to check how does the original VAE receive input:
     # [batch size, 3 (triplanes), #channels, res, res] or [batch size, #channels, res, res * 3 (triplanes)]
     # seems both work(?)
+    
+    # normalize triplane value to -1, 1
+    triplane_weights[50:51][0] = (triplane_weights[50:51][0] - triplane_weights[50:51][0].min()) / (triplane_weights[50:51][0].max() - triplane_weights[50:51][0].min())
+    triplane_weights[50:51][0] = triplane_weights[50:51][0] * 2 - 1
+    
     train_dataloader = torch.utils.data.DataLoader(
         LatentWeightDataset(
-        triplane_weights,
+        triplane_weights[50:51],
         vae_config["plane_shape"]),
         batch_size=batch_size,
         shuffle=True)
