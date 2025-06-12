@@ -7,9 +7,11 @@ import logging
 import argparse
 from datetime import datetime
 
-from autoencoder_2D_origin import VAE
+from autoencoder_2D_origin import VAE, VAE_no_KL
 from timevarying_data_helper import LatentWeightDataset
 from fit_triplane.visualize_triplane import plot_single_channel
+
+check_plane_idx = 50
 
 # redefinition of traning pipeline for multiple input volumes
 def train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_decay, lr_gamma, epochs=100, tensorboard_writer=None, console_logger=None, run_dir=None, ckpt_freq=100, resume_epoch=0):
@@ -37,16 +39,20 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_dec
             # Add gradient scaling for mixed precision training
             # But loss would become NaN, so disable it for now
             with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=False):
-                output = vae_model(raw_data)
+                output = vae_model(raw_data[0])
                 # for debugging
-                # if epoch == 5 and batch_idx == 0:
-                #     import pdb; pdb.set_trace()
-                #     plot_single_channel(output[0][0][0][0], f"epoch{epoch}_batch{batch_idx}", save_path=f"epoch{epoch}_batch{batch_idx}")
+                if epoch % 10 == 0:
+                    if check_plane_idx in raw_data[1]:
+                        # import pdb; pdb.set_trace()
+                        channel = 16
+                        for plane in range (3):
+                            # import pdb; pdb.set_trace()
+                            plot_single_channel(output[0][torch.where(raw_data[1] == check_plane_idx)[0].item()][plane][channel].detach(), f"epoch{epoch}_plane{plane}", save_path=f"epoch{epoch}_plane{plane}")
                 # reconstructed results is the first element of the output (output[0])
-                recon_loss = F.mse_loss(output[0], raw_data)
-                kl_loss = vae_model.loss_function(*output)
-                loss = recon_loss + kl_loss
-                # loss = recon_loss
+                recon_loss = F.mse_loss(output[0], raw_data[0])
+                # kl_loss = vae_model.loss_function(*output)
+                # loss = recon_loss + kl_loss
+                loss = recon_loss
             scalar.scale(loss).backward()
             scalar.step(optimizer)
             scalar.update()
@@ -54,17 +60,19 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_dec
             # loss.backward()
             # optimizer.step()
             
-            running_recon_loss += recon_loss.item() * raw_data.shape[0]
-            running_kl_loss += kl_loss.item() * raw_data.shape[0]
+            running_recon_loss += recon_loss.item() * raw_data[0].shape[0]
+            # running_kl_loss += kl_loss.item() * raw_data.shape[0]
             running_loss += running_recon_loss + running_kl_loss
-            total_elems += raw_data.shape[0]
+            total_elems += raw_data[0].shape[0]
             
             # TODO: need to sperate PSNR evaluation from each volume (cause currently has four volumes in one batch)
             # console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
             if console_logger is not None:
-                console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
+                # console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
+                console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
             else:
-                print(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
+                # print(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
+                print(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
             # import pdb; pdb.set_trace()
         
         # calculate the average loss for the epoch
@@ -113,15 +121,15 @@ if __name__ == "__main__":
                   "z_shape": [4, 32, 32],
                   "num_heads": 16,
                   "transform_depth": 1}
-    vae_model = VAE(vae_config).cuda()
+    vae_model = VAE_no_KL(vae_config).cuda()
     
     n_timesteps = 90
     batch_size = 8
     init_lr = 0.0001
-    lr_decay = 300
+    lr_decay = 50
     lr_gamma = 0.5
-    epoch = 1500
-    ckpt_freq = 500
+    epoch = 500
+    ckpt_freq = 100
     expname = "triplane_VAE_ch_32"
     
     # create directory for saving logs
@@ -160,14 +168,14 @@ if __name__ == "__main__":
         batch_size=batch_size,
         shuffle=True)
     # input_tensor = torch.randn(2, 3, 32, 128, 128).cuda()
-    input_tensor = next(iter(train_dataloader)).cuda()
+    input_tensor = next(iter(train_dataloader))[0].cuda()
     out = vae_model(input_tensor)
-    loss = vae_model.loss_function(*out)
-    print("loss: {}".format(loss))
+    # loss = vae_model.loss_function(*out)
+    # print("loss: {}".format(loss))
     print("z shape: {}".format(out[-1].shape))
     print("reconstruct shape: {}".format(out[0].shape))
-    samples = vae_model.sample(2)
-    print("samples shape: {}".format(samples[0].shape))
+    # samples = vae_model.sample(2)
+    # print("samples shape: {}".format(samples[0].shape))
     
     optimizer = torch.optim.Adam(vae_model.parameters(), lr=init_lr)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_decay, gamma=lr_gamma)

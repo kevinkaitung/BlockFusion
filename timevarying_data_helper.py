@@ -191,7 +191,7 @@ class LatentWeightDataset(torch.utils.data.Dataset):
         self.latent_weights = self.latent_weights.reshape([self.n_params, z_shape[0], z_shape[1], z_shape[2], z_shape[3]])
         
     def __getitem__(self, index):
-        return self.latent_weights[index]
+        return self.latent_weights[index], index
 
     def __len__(self):
         return self.n_params
