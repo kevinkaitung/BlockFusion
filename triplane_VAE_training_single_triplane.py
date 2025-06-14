@@ -10,6 +10,7 @@ from datetime import datetime
 from autoencoder_2D_origin import VAE, VAE_no_KL
 from timevarying_data_helper import LatentWeightDataset
 from fit_triplane.visualize_triplane import plot_single_channel
+from simple_autoencoder import ConvAutoencoder
 
 check_plane_idx = 50
 
@@ -128,7 +129,8 @@ if __name__ == "__main__":
                   "z_shape": [4, 32, 32],
                   "num_heads": 16,
                   "transform_depth": 1}
-    vae_model = VAE_no_KL(vae_config, True).cuda()
+    # model = VAE_no_KL(vae_config, True).cuda()
+    model = ConvAutoencoder().cuda()
     
     n_timesteps = 90
     # batch_size = 8
@@ -138,7 +140,9 @@ if __name__ == "__main__":
     lr_gamma = 0.5
     epoch = 500
     ckpt_freq = 1000
-    expname = "triplane_VAE_ch_32_single_volume_single_triplane"
+    expname = "simple_autoencoder_1_volume_1_triplane"
+    description = """Use simple autoencoder (only conv layers for downsampling and upsampling, no residual blocks or transformers).
+                     This tests the effect of adding batch normalization after each conv layer."""
     
     # create directory for saving logs
     base_dir = "./logs"
@@ -159,7 +163,8 @@ if __name__ == "__main__":
                     filemode=logging_file_md)
     console_logger = logging.getLogger()
     console_logger.setLevel(logging.DEBUG)
-
+    console_logger.debug("Experiment description:" + description)
+    
     # load pretrained tri-plane here
     loaded_model = torch.load("fit_triplane/ch_32_saved_model.ckpt")
     triplane_weights = [loaded_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_timesteps)]
@@ -182,7 +187,7 @@ if __name__ == "__main__":
         shuffle=True)
     # input_tensor = torch.randn(2, 3, 32, 128, 128).cuda()
     input_tensor = next(iter(train_dataloader))[0].cuda()
-    out = vae_model(input_tensor)
+    out = model(input_tensor)
     # loss = vae_model.loss_function(*out)
     # print("loss: {}".format(loss))
     print("z shape: {}".format(out[-1].shape))
@@ -190,7 +195,7 @@ if __name__ == "__main__":
     # samples = vae_model.sample(2)
     # print("samples shape: {}".format(samples[0].shape))
     
-    optimizer = torch.optim.Adam(vae_model.parameters(), lr=init_lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=init_lr)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_decay, gamma=lr_gamma)
     
-    train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_decay, lr_gamma, epoch, tensorboard_writer, console_logger, run_dir, ckpt_freq, 0)
+    train_vae(model, train_dataloader, optimizer, scheduler, init_lr, lr_decay, lr_gamma, epoch, tensorboard_writer, console_logger, run_dir, ckpt_freq, 0)
