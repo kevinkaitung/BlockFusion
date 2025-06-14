@@ -94,7 +94,7 @@ if __name__ == "__main__":
             psnr_list.append(20 * torch.log10(value_range / torch.sqrt(loss)))
             # import pdb; pdb.set_trace()
             # ssim_list.append(structural_similarity_index_measure(outputs, raw_data, data_range=1.0).item())
-            if batch_idx == 55:
+            if batch_idx == 50:
                 outputs.detach().cpu().numpy().astype(np.float32).tofile("pred.bin")
     for i in range(len(psnr_list)):
         print(f"timestep {i} - PSNR: {psnr_list[i]}")

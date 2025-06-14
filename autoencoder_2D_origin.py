@@ -15,6 +15,7 @@ from collections import OrderedDict
 from torch import nn, Tensor
 from torch.jit.annotations import Tuple, List, Dict, Optional
 
+from fit_triplane.visualize_triplane import plot_single_channel
 
 
 class FPN_down_g(nn.Module):
@@ -1306,21 +1307,29 @@ class SpatialTransformer_(nn.Module):
 class GroupConv(nn.Module):
     def __init__(self, in_channels,out_channels, kernel_size, stride=1,padding=0) -> None:
         super(GroupConv, self).__init__()
-        self.conv = nn.Conv2d(3*in_channels, 3*out_channels, kernel_size, stride, padding,groups=3)
+        if single_triplane:
+            self.num_triplane = 1
+        else:
+            self.num_triplane = 3
+        self.conv = nn.Conv2d(self.num_triplane*in_channels, self.num_triplane*out_channels, kernel_size, stride, padding,groups=self.num_triplane)
     def forward(self, data: Tensor, **kwargs) -> Tensor:
-        data = torch.concat(torch.chunk(data,3,dim=-1),dim=1)
+        data = torch.concat(torch.chunk(data,self.num_triplane,dim=-1),dim=1)
         data = self.conv(data)
-        data = torch.concat(torch.chunk(data,3,dim=1),dim=-1)
+        data = torch.concat(torch.chunk(data,self.num_triplane,dim=1),dim=-1)
         return data
 
 class GroupConvTranspose(nn.Module):
     def __init__(self, in_channels,out_channels, kernel_size, stride=1,padding=0,output_padding=0) -> None:
         super(GroupConvTranspose, self).__init__()
-        self.conv = nn.ConvTranspose2d(3*in_channels, 3*out_channels, kernel_size, stride, padding,output_padding,groups=3)
+        if single_triplane:
+            self.num_triplane = 1
+        else:
+            self.num_triplane = 3
+        self.conv = nn.ConvTranspose2d(self.num_triplane*in_channels, self.num_triplane*out_channels, kernel_size, stride, padding,output_padding,groups=self.num_triplane)
     def forward(self, data: Tensor, **kwargs) -> Tensor:
-        data = torch.concat(torch.chunk(data,3,dim=-1),dim=1)
+        data = torch.concat(torch.chunk(data,self.num_triplane,dim=-1),dim=1)
         data = self.conv(data)
-        data = torch.concat(torch.chunk(data,3,dim=1),dim=-1)
+        data = torch.concat(torch.chunk(data,self.num_triplane,dim=1),dim=-1)
         return data
 
 class GroupNorm32(nn.GroupNorm):
@@ -1793,13 +1802,22 @@ class VAE(nn.Module):
 
 
 class VAE_no_KL(nn.Module):
-    def __init__(self, vae_config) -> None:
+    def __init__(self, vae_config, is_single_triplane=False) -> None:
         super(VAE_no_KL, self).__init__()
 
         plane_shape = vae_config.get("plane_shape", [3, 32, 256, 256])
         z_shape = vae_config.get("z_shape", [4, 64, 64])
         num_heads = vae_config.get("num_heads", 16)
         transform_depth = vae_config.get("transform_depth", 1)
+
+        # not a good practice but temporary solution to test single triplane
+        global single_triplane
+        single_triplane = is_single_triplane
+        if single_triplane:
+            self.num_triplane = 1
+        else:
+            self.num_triplane = 3
+
 
         self.plane_dim = len(plane_shape) + 1
         self.plane_shape = plane_shape
@@ -2047,9 +2065,9 @@ class VAE_no_KL(nn.Module):
         """
         result = enc_input
         if self.plane_dim == 5:
-            result = torch.concat(torch.chunk(result,3,dim=1),dim=-1).squeeze(1)
+            result = torch.concat(torch.chunk(result,self.num_triplane,dim=1),dim=-1).squeeze(1)
         elif self.plane_dim == 4:
-            result = torch.concat(torch.chunk(result,3,dim=1),dim=-1)
+            result = torch.concat(torch.chunk(result,self.num_triplane,dim=1),dim=-1)
 
         feature = self.in_layer(result)
         features_down = []
@@ -2089,14 +2107,16 @@ class VAE_no_KL(nn.Module):
                 x = module(x)
         if self.plane_dim == 5:
             plane_w = self.plane_shape[-1]
-            x = torch.concat([x[..., 0: plane_w].unsqueeze(1),
-                              x[..., plane_w: plane_w * 2].unsqueeze(1),
-                              x[..., plane_w * 2: plane_w * 3].unsqueeze(1), ], dim=1)
+            x = torch.concat([x[..., idx * plane_w: (idx + 1) * plane_w].unsqueeze(1) for idx in range(self.num_triplane) ], dim=1)
+            # x = torch.concat([x[..., 0: plane_w].unsqueeze(1),
+            #                   x[..., plane_w: plane_w * 2].unsqueeze(1),
+            #                   x[..., plane_w * 2: plane_w * 3].unsqueeze(1), ], dim=1)
         elif self.plane_dim == 4:
             plane_w = self.plane_shape[-1]
-            x = torch.concat([x[..., 0: plane_w],
-                              x[..., plane_w: plane_w * 2],
-                              x[..., plane_w * 2: plane_w * 3], ], dim=1)
+            x = torch.concat([x[..., idx * plane_w: (idx + 1) * plane_w] for idx in range(self.num_triplane) ], dim=1)
+            # x = torch.concat([x[..., 0: plane_w],
+            #                   x[..., plane_w: plane_w * 2],
+            #                   x[..., plane_w * 2: plane_w * 3], ], dim=1)
         return x
 
     def reparameterize(self, mu: Tensor, logvar: Tensor) -> Tensor:
