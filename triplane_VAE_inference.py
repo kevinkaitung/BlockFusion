@@ -19,7 +19,7 @@ if __name__ == "__main__":
                   "transform_depth": 1}
     # TODO: should receive arguments to specify the location of pretrained model and other arguments
     vae_model = VAE_no_KL(vae_config).cuda()
-    pretrained_vae_model = torch.load("logs/triplane_VAE_ch_32/20250612-003423/vae_model_epoch_19999.ckpt")
+    pretrained_vae_model = torch.load("logs/triplane_VAE_ch_32_single_volume/20250614-180226/vae_model_epoch_9999.ckpt")
     vae_model.load_state_dict(pretrained_vae_model['model_state_dict'])
     
     n_timesteps = 90
@@ -33,6 +33,11 @@ if __name__ == "__main__":
     # Need to check how does the original VAE receive input:
     # [batch size, 3 (triplanes), #channels, res, res] or [batch size, #channels, res, res * 3 (triplanes)]
     # seems both work(?)
+    # normalize values to -1~1 to align with the value range used in training
+    max_50 = triplane_weights[50:51][0].max()
+    min_50 = triplane_weights[50:51][0].min()
+    triplane_weights[50:51][0] = (triplane_weights[50:51][0] - min_50) / (max_50 - min_50)
+    triplane_weights[50:51][0] = triplane_weights[50:51][0] * 2 - 1
     train_dataloader = torch.utils.data.DataLoader(
         LatentWeightDataset(
         triplane_weights,
@@ -63,6 +68,8 @@ if __name__ == "__main__":
             # print(f"Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}")
             print(f"Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}")
             # import pdb; pdb.set_trace()
+            # normalize output from -1~1 back to its original value range to align with the value range of triplane fitting
+            output[0] = ((output[0] - (-1)) / 2) * (max_50 - min_50) + min_50
             loaded_model['triplane_state_dict'][f"{batch_idx}.triplane"] = output[0]
     
     torch.save(loaded_model, "VAE_Reconstructed_triplane_ch_32.pt")

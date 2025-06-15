@@ -42,7 +42,7 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_dec
                 output = vae_model(raw_data[0])
                 # output[0] = output[0].clamp(min, max)
                 # for debugging
-                if epoch % 10 == 0 or epoch < 10:
+                if epoch % 1000 == 0 or epoch < 5:
                     # if check_plane_idx in raw_data[1]:
                     #     # import pdb; pdb.set_trace()
                     #     channel = 16
@@ -134,11 +134,13 @@ if __name__ == "__main__":
     # batch_size = 8
     batch_size = 1
     init_lr = 0.0001
-    lr_decay = 2000
+    lr_decay = 1500
     lr_gamma = 0.5
-    epoch = 100
-    ckpt_freq = 200
+    epoch = 10000
+    ckpt_freq = 5000
     expname = "triplane_VAE_ch_32_single_volume"
+    description = """10000 epochs training to see the potential of revised autoencoder,
+    which has no batchnorm after conv layers, and normalize raw triplane value range to -1~1"""
     
     # create directory for saving logs
     base_dir = "./logs"
@@ -159,6 +161,7 @@ if __name__ == "__main__":
                     filemode=logging_file_md)
     console_logger = logging.getLogger()
     console_logger.setLevel(logging.DEBUG)
+    console_logger.debug("Experiment description: " + description)
 
     # load pretrained tri-plane here
     loaded_model = torch.load("fit_triplane/ch_32_saved_model.ckpt")

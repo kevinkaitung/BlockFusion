@@ -1841,7 +1841,7 @@ class VAE_no_KL(nn.Module):
             use_checkpoint=False,
             group_layer_num_in=1
         ),
-            nn.BatchNorm2d(128),
+            # nn.BatchNorm2d(128),
             nn.SiLU())
 
         #
@@ -1857,7 +1857,7 @@ class VAE_no_KL(nn.Module):
                 nn.Sequential(
                     # nn.Conv2d(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
                     GroupConv(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
-                    nn.BatchNorm2d(h_dim),
+                    # nn.BatchNorm2d(h_dim),
                     nn.SiLU(),
                     ResBlock_g(
                         h_dim,
@@ -1867,7 +1867,7 @@ class VAE_no_KL(nn.Module):
                         dims=2,
                         use_checkpoint=False,
                     ),
-                    nn.BatchNorm2d(h_dim),
+                    # nn.BatchNorm2d(h_dim),
                     nn.SiLU()),
             )
             in_channels = h_dim
@@ -1878,7 +1878,7 @@ class VAE_no_KL(nn.Module):
             self.encoders_down.append(nn.Sequential(
                 # nn.Conv2d(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
                 GroupConv(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
-                nn.BatchNorm2d(h_dim),
+                # nn.BatchNorm2d(h_dim),
                 nn.SiLU(),
                 SpatialTransformer_(h_dim,
                                    num_heads,
@@ -1911,7 +1911,7 @@ class VAE_no_KL(nn.Module):
                                                             stride=2,
                                                             padding=1,
                                                             output_padding=1),
-                                         nn.BatchNorm2d(h_dim),
+                                        #  nn.BatchNorm2d(h_dim),
                                          nn.SiLU()))
             if i == 2:
                 modules.append(nn.Sequential(ResBlock_g(
@@ -1925,7 +1925,7 @@ class VAE_no_KL(nn.Module):
                     group_layer_num_in = 1,
                     group_layer_num_out = 1
                 ),
-                    nn.BatchNorm2d(z_shape[0]),
+                    # nn.BatchNorm2d(z_shape[0]),
                     # nn.BatchNorm2d(2 * z_shape[0]),
                     nn.SiLU()))
                 in_channels = z_shape[0]
@@ -1961,7 +1961,7 @@ class VAE_no_KL(nn.Module):
             use_checkpoint=False,
             group_layer_num_in=1
         ),
-            nn.BatchNorm2d(512),
+            # nn.BatchNorm2d(512),
             nn.SiLU())
 
         self.decoders_down = nn.ModuleList()
@@ -1972,7 +1972,7 @@ class VAE_no_KL(nn.Module):
             self.decoders_down.append(nn.Sequential(
                 # nn.Conv2d(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
                 GroupConv(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
-                nn.BatchNorm2d(h_dim),
+                # nn.BatchNorm2d(h_dim),
                 nn.SiLU(),
                 SpatialTransformer_(h_dim,
                                    num_heads,
@@ -2005,7 +2005,7 @@ class VAE_no_KL(nn.Module):
                                                             stride=2,
                                                             padding=1,
                                                             output_padding=1),
-                                         nn.BatchNorm2d(h_dim),
+                                        #  nn.BatchNorm2d(h_dim),
                                          nn.SiLU()))
             if i < 4:
                 modules.append(nn.Sequential(SpatialTransformer_(h_dim,
@@ -2031,7 +2031,7 @@ class VAE_no_KL(nn.Module):
                     dims=2,
                     use_checkpoint=False,
                 ),
-                    nn.BatchNorm2d(h_dim),
+                    # nn.BatchNorm2d(h_dim),
                     nn.SiLU()))
                 in_channels = h_dim
             self.decoders_up.append(nn.Sequential(*modules))
@@ -2043,7 +2043,7 @@ class VAE_no_KL(nn.Module):
                                stride=2,
                                padding=1,
                                output_padding=1),
-            nn.BatchNorm2d(in_channels),
+            # nn.BatchNorm2d(in_channels),
             nn.SiLU(),
             ResBlock_g(
                 in_channels,
@@ -2053,7 +2053,7 @@ class VAE_no_KL(nn.Module):
                 dims=2,
                 use_checkpoint=False,
             ),
-            nn.BatchNorm2d(self.plane_shape[1]),
+            # nn.BatchNorm2d(self.plane_shape[1]),
             nn.Tanh()))
 
     def encode(self, enc_input: Tensor) -> List[Tensor]:
