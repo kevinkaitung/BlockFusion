@@ -42,18 +42,15 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_dec
                 output = vae_model(raw_data[0])
                 # output[0] = output[0].clamp(min, max)
                 # for debugging
-                if epoch % 1000 == 0 or epoch < 5:
-                    # if check_plane_idx in raw_data[1]:
-                    #     # import pdb; pdb.set_trace()
-                    #     channel = 16
-                    #     for plane in range (3):
-                    #         # import pdb; pdb.set_trace()
-                    #         plot_single_channel(output[0][torch.where(raw_data[1] == check_plane_idx)[0].item()][plane][channel].detach(), f"epoch{epoch}_plane{plane}", save_path=f"epoch{epoch}_plane{plane}")
+                if epoch % 100 == 99 or epoch < 5:
                     channel = 16
-                    for plane in range (3):
-                    # for plane in range (1):
-                        # import pdb; pdb.set_trace()
-                        plot_single_channel(output[0][0][plane][channel].detach(), f"epoch{epoch}_plane{plane}", save_path=os.path.join(run_dir, f"epoch{epoch}_plane{plane}.png"))
+                    # for training on all volumes
+                    if check_plane_idx in raw_data[1]:
+                        for plane in range (3):
+                            plot_single_channel(output[0][torch.where(raw_data[1] == check_plane_idx)[0].item()][plane][channel].detach(), f"epoch{epoch}_plane{plane}", save_path=os.path.join(run_dir, f"epoch{epoch}_plane{plane}.png"))
+                    # for only one volume
+                    # for plane in range (3):
+                    #     plot_single_channel(output[0][0][plane][channel].detach(), f"epoch{epoch}_plane{plane}", save_path=os.path.join(run_dir, f"epoch{epoch}_plane{plane}.png"))
                     
                 # reconstructed results is the first element of the output (output[0])
                 recon_loss = F.mse_loss(output[0], raw_data[0])
@@ -131,16 +128,16 @@ if __name__ == "__main__":
     vae_model = VAE_no_KL(vae_config).cuda()
     
     n_timesteps = 90
-    # batch_size = 8
-    batch_size = 1
+    batch_size = 9
+    # batch_size = 1
     init_lr = 0.0001
-    lr_decay = 1500
+    lr_decay = 250
     lr_gamma = 0.5
-    epoch = 10000
-    ckpt_freq = 5000
-    expname = "triplane_VAE_ch_32_single_volume"
-    description = """10000 epochs training to see the potential of revised autoencoder,
-    which has no batchnorm after conv layers, and normalize raw triplane value range to -1~1"""
+    epoch = 2500
+    ckpt_freq = 1000
+    expname = "triplane_revised_autoencoder_training"
+    description = """2500 epochs training of revised autoencoder (no batchnorm after conv layers) on all volumes' triplanes.
+    Normalize raw triplanes' value range to -1~1 (global normalization based on the max and min value from all triplanes)"""
     
     # create directory for saving logs
     base_dir = "./logs"
@@ -174,12 +171,19 @@ if __name__ == "__main__":
     # seems both work(?)
     
     # normalize triplane value to -1, 1
-    triplane_weights[50:51][0] = (triplane_weights[50:51][0] - triplane_weights[50:51][0].min()) / (triplane_weights[50:51][0].max() - triplane_weights[50:51][0].min())
-    triplane_weights[50:51][0] = triplane_weights[50:51][0] * 2 - 1
+    # normalization for training only one volume
+    # triplane_weights[50:51][0] = (triplane_weights[50:51][0] - triplane_weights[50:51][0].min()) / (triplane_weights[50:51][0].max() - triplane_weights[50:51][0].min())
+    # triplane_weights[50:51][0] = triplane_weights[50:51][0] * 2 - 1
+    
+    # normalization for training all volumes
+    triplane_weights = (triplane_weights - triplane_weights.min()) / (triplane_weights.max() - triplane_weights.min())
+    triplane_weights = triplane_weights * 2 - 1
     
     train_dataloader = torch.utils.data.DataLoader(
         LatentWeightDataset(
-        triplane_weights[50:51],
+        # test training for only one volume
+        # triplane_weights[50:51],
+        triplane_weights,
         vae_config["plane_shape"]),
         batch_size=batch_size,
         shuffle=True)
