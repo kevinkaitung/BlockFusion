@@ -1802,7 +1802,8 @@ class VAE(nn.Module):
 
 
 class VAE_no_KL(nn.Module):
-    def __init__(self, vae_config, is_single_triplane=False) -> None:
+    def __init__(self, vae_config, encoder_dims, feature_size_encoder, decoder_dims, feature_size_decoder, fpn_encoders_layer_dim_idx,
+                 fpn_decoders_layer_dim_idx, fpn_encoders_down_idx, fpn_encoders_up_idx, fpn_decoders_down_idx, fpn_decoders_up_idx, block_config, is_single_triplane=False) -> None:
         super(VAE_no_KL, self).__init__()
 
         plane_shape = vae_config.get("plane_shape", [3, 32, 256, 256])
@@ -1823,238 +1824,137 @@ class VAE_no_KL(nn.Module):
         self.plane_shape = plane_shape
         self.z_shape = z_shape
 
-        # hidden_dims = [512, 512, 1024, 1024, 1024, 1024, 1024, 2 * self.z_shape[0]]
-        hidden_dims = [512, 512, 1024, 1024, 1024, 1024, 1024, self.z_shape[0]]
-        # feature size:  64,  32,  16,   8,    4,    8,   16,       32
-        feature_size = [64, 32, 16, 8, 4, 8, 16, 32]
-        #
+        self.num_heads = num_heads
+        self.transform_depth = transform_depth
 
-        hidden_dims_decoder = [1024, 1024, 1024, 1024, 1024, 512, 512]
-        # feature size:  16,    8,   4,   8,    16,  32,  64
-
+        
+        self.fpn_encoders_down_idx = fpn_encoders_down_idx
+        self.fpn_encoders_up_idx = fpn_encoders_up_idx
+        self.fpn_decoders_down_idx = fpn_decoders_down_idx
+        self.fpn_decoders_up_idx = fpn_decoders_up_idx
+        
+        
         self.in_layer = nn.Sequential(ResBlock_g(
             plane_shape[1],
             dropout=0,
-            out_channels=128,
+            out_channels=encoder_dims[0],
             use_conv=True,
             dims=2,
             use_checkpoint=False,
             group_layer_num_in=1
         ),
-            # nn.BatchNorm2d(128),
+            # nn.BatchNorm2d(encoder_dims[0]),
             nn.SiLU())
 
-        #
-        # self.spatial_modulation = nn.Linear(128*3, 128*3)
 
         # Build Encoder
         self.encoders_down = nn.ModuleList()
-        in_channels = 128
-        for i, h_dim in enumerate(hidden_dims[:1]):
-            stride = 2
-            modules = []
-            modules.append(
-                nn.Sequential(
-                    # nn.Conv2d(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
-                    GroupConv(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
-                    # nn.BatchNorm2d(h_dim),
-                    nn.SiLU(),
-                    ResBlock_g(
-                        h_dim,
-                        dropout=0,
-                        out_channels=h_dim,
-                        use_conv=True,
-                        dims=2,
-                        use_checkpoint=False,
-                    ),
-                    # nn.BatchNorm2d(h_dim),
-                    nn.SiLU()),
-            )
-            in_channels = h_dim
-            self.encoders_down.append(nn.Sequential(*modules))
-
-        for i, h_dim in enumerate(hidden_dims[1:5]):
-            dim_head = h_dim // num_heads
-            self.encoders_down.append(nn.Sequential(
-                # nn.Conv2d(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
-                GroupConv(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
-                # nn.BatchNorm2d(h_dim),
-                nn.SiLU(),
-                SpatialTransformer_(h_dim,
-                                   num_heads,
-                                   dim_head,
-                                   depth=transform_depth,
-                                   context_dim=h_dim,
-                                   disable_self_attn=False,
-                                   use_linear=True,
-                                   attn_type="linear",
-                                   use_checkpoint=True,
-                                   layer=feature_size[i + 1]
-                                   ),
-                nn.BatchNorm2d(h_dim),
-                nn.SiLU()
-            ))
-            in_channels = h_dim
-
-        # self.encoder_fpn = FPN_down([512, 512, 1024, 1024], [512, 1024, 1024])
-        self.encoder_fpn = FPN_down_g([512, 512, 1024, 1024], [512, 1024, 1024])
+        for config in block_config["encoders_down"]:
+            self.encoders_down.append(self.make_block(downsample=True, **config))
+        
+        # specify the which encoder layer as FPN layer
+        self.encoder_fpn = FPN_down_g([encoder_dims[i] for i in fpn_encoders_layer_dim_idx], [encoder_dims[i] for i in fpn_encoders_layer_dim_idx[1:]])
+        
         self.encoders_up = nn.ModuleList()
-        for i, h_dim in enumerate(hidden_dims[5:]):
-            modules = []
-            if i > 0:
-                in_channels = in_channels * 2
-            dim_head = h_dim // num_heads
-            modules.append(nn.Sequential(
-                                         GroupConvTranspose(in_channels,
-                                                            h_dim,
-                                                            kernel_size=3,
-                                                            stride=2,
-                                                            padding=1,
-                                                            output_padding=1),
-                                        #  nn.BatchNorm2d(h_dim),
-                                         nn.SiLU()))
-            if i == 2:
-                modules.append(nn.Sequential(ResBlock_g(
-                    h_dim,
-                    dropout=0,
-                    out_channels=z_shape[0],
-                    # out_channels=2 * z_shape[0],
-                    use_conv=True,
-                    dims=2,
-                    use_checkpoint=False,
-                    group_layer_num_in = 1,
-                    group_layer_num_out = 1
-                ),
-                    # nn.BatchNorm2d(z_shape[0]),
-                    # nn.BatchNorm2d(2 * z_shape[0]),
-                    nn.SiLU()))
-                in_channels = z_shape[0]
-            else:
-                modules.append(nn.Sequential(SpatialTransformer_(h_dim,
-                                                                num_heads,
-                                                                dim_head,
-                                                                depth=transform_depth,
-                                                                context_dim=h_dim,
-                                                                disable_self_attn=False,
-                                                                use_linear=True,
-                                                                attn_type="linear",
-                                                                use_checkpoint=True,
-                                                                layer=feature_size[i + 5]
-                                                                ),
-                                             nn.BatchNorm2d(h_dim),
-                                             nn.SiLU()))
-                in_channels = h_dim
-            self.encoders_up.append(nn.Sequential(*modules))
-
-        ## build decoder
-        hidden_dims_decoder = [1024, 1024, 1024, 1024, 1024, 512, 512]
-        # feature size:  16,    8,   4,   8,    16,  32,  64
-
-        feature_size_decoder = [16, 8, 4, 8, 16, 32, 64]
-
+        for config in block_config["encoders_up"]:
+            self.encoders_up.append(self.make_block(downsample=False, **config))
+        
+        
         self.decoder_in_layer = nn.Sequential(ResBlock_g(
             self.z_shape[0],
             dropout=0,
-            out_channels=512,
+            out_channels=decoder_dims[0],
             use_conv=True,
             dims=2,
             use_checkpoint=False,
             group_layer_num_in=1
         ),
-            # nn.BatchNorm2d(512),
+            # nn.BatchNorm2d(deocder_dims[0]),
             nn.SiLU())
 
         self.decoders_down = nn.ModuleList()
-        in_channels = 512
-        for i, h_dim in enumerate(hidden_dims_decoder[0:3]):
-            dim_head = h_dim // num_heads
-            stride = 2
-            self.decoders_down.append(nn.Sequential(
-                # nn.Conv2d(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
-                GroupConv(in_channels, out_channels=h_dim, kernel_size=3, stride=stride, padding=1),
-                # nn.BatchNorm2d(h_dim),
-                nn.SiLU(),
-                SpatialTransformer_(h_dim,
-                                   num_heads,
-                                   dim_head,
-                                   depth=transform_depth,
-                                   context_dim=h_dim,
-                                   disable_self_attn=False,
-                                   use_linear=True,
-                                   attn_type="linear",
-                                   use_checkpoint=True,
-                                   layer=feature_size_decoder[i]
-                                   ),
-                nn.BatchNorm2d(h_dim),
-                nn.SiLU()
-            ))
-            in_channels = h_dim
-
+        for config in block_config["decoders_down"]:
+            self.decoders_down.append(self.make_block(downsample=True, **config))
+        
         # self.decoder_fpn = FPN_up([1024, 1024, 1024, 512], [1024, 1024, 512])
-        self.decoder_fpn = FPN_up_g([1024, 1024, 1024, 512], [1024, 1024, 512])
+        self.decoder_fpn = FPN_up_g([decoder_dims[i] for i in fpn_decoders_layer_dim_idx[::-1]], [decoder_dims[i] for i in fpn_decoders_layer_dim_idx[::-1][1:]]) #hidden_dims_decoder[5,4]?
+        
+        
         self.decoders_up = nn.ModuleList()
-        for i, h_dim in enumerate(hidden_dims_decoder[3:]):
-            modules = []
-            if i > 0 and i < 4:
-                in_channels = in_channels * 2
-            dim_head = h_dim // num_heads
-            modules.append(nn.Sequential(
-                                        GroupConvTranspose( in_channels,
-                                                            h_dim,
-                                                            kernel_size=3,
-                                                            stride=2,
-                                                            padding=1,
-                                                            output_padding=1),
-                                        #  nn.BatchNorm2d(h_dim),
-                                         nn.SiLU()))
-            if i < 4:
-                modules.append(nn.Sequential(SpatialTransformer_(h_dim,
-                                                                num_heads,
-                                                                dim_head,
-                                                                depth=transform_depth,
-                                                                context_dim=h_dim,
-                                                                disable_self_attn=False,
-                                                                use_linear=True,
-                                                                attn_type="linear",
-                                                                use_checkpoint=True,
-                                                                layer=feature_size_decoder[i + 3]
-                                                                ),
-                                             nn.BatchNorm2d(h_dim),
-                                             nn.SiLU()))
-                in_channels = h_dim
-            else:
-                modules.append(nn.Sequential(ResBlock_g(
-                    h_dim,
-                    dropout=0,
-                    out_channels=h_dim,
-                    use_conv=True,
-                    dims=2,
-                    use_checkpoint=False,
-                ),
-                    # nn.BatchNorm2d(h_dim),
-                    nn.SiLU()))
-                in_channels = h_dim
-            self.decoders_up.append(nn.Sequential(*modules))
+        for config in block_config["decoders_up"]:
+            self.decoders_up.append(self.make_block(downsample=False, **config))
 
-        self.decoders_up.append(nn.Sequential(
-            GroupConvTranspose(in_channels,
-                               in_channels,
-                               kernel_size=3,
-                               stride=2,
-                               padding=1,
-                               output_padding=1),
-            # nn.BatchNorm2d(in_channels),
-            nn.SiLU(),
-            ResBlock_g(
-                in_channels,
-                dropout=0,
-                out_channels=self.plane_shape[1],
-                use_conv=True,
-                dims=2,
-                use_checkpoint=False,
-            ),
-            # nn.BatchNorm2d(self.plane_shape[1]),
-            nn.Tanh()))
+
+    def make_block(self, downsample, in_channels, inter_channels, stride, out_channels, feature_size,
+                   use_transformer=False, use_resblock=True, is_decoder_output=False):
+        layers = []
+        if downsample:
+            conv = GroupConv(in_channels, inter_channels, kernel_size=3, stride=stride, padding=1)
+        else:
+            if stride == 1:
+                conv = GroupConvTranspose(in_channels, inter_channels, kernel_size=3, stride=stride, padding=1, output_padding=0)
+            elif stride == 2:
+                conv = GroupConvTranspose(in_channels, inter_channels, kernel_size=3, stride=stride, padding=1, output_padding=1)
+            else:
+                RuntimeError(f"Unsupported stride {stride} for conv layer")
+        layers.extend([conv, 
+                    #    nn.BatchNorm2d(inter_channels), 
+                       nn.SiLU()])
+        
+        if use_transformer:
+            dim_head = inter_channels // self.num_heads
+            transformer = SpatialTransformer_(inter_channels,
+                                            self.num_heads,
+                                            dim_head,
+                                            depth=self.transform_depth,
+                                            context_dim=inter_channels,
+                                            disable_self_attn=False,
+                                            use_linear=True,
+                                            attn_type="linear",
+                                            use_checkpoint=True,
+                                            layer=feature_size
+                                            )
+            layers.extend([transformer, 
+                           nn.BatchNorm2d(inter_channels), 
+                           nn.SiLU()])
+        
+        #TODO: check whether the num_groups specified here is reasonable or not
+        if inter_channels > 64:
+            in_num_groups = 32
+        elif inter_channels >= 32:
+            # Note: seems 4 channels in a group is common
+            in_num_groups = inter_channels // 4
+        else:
+            in_num_groups = 1
+        
+        if out_channels > 64:
+            out_num_groups = 32
+        elif out_channels >= 32:
+            out_num_groups = out_channels // 4
+        else:
+            out_num_groups = 1
+        
+        if use_resblock:
+            resblock = ResBlock_g(inter_channels,
+                                dropout=0,
+                                out_channels=out_channels,
+                                use_conv=True,
+                                dims=2,
+                                use_checkpoint=False,
+                                group_layer_num_in=in_num_groups,
+                                group_layer_num_out=out_num_groups
+                                )
+        
+            if is_decoder_output:
+                layers.extend([resblock, 
+                            #    nn.BatchNorm2d(out_channels), 
+                               nn.Tanh()])
+            else:
+                layers.extend([resblock, 
+                            #    nn.BatchNorm2d(out_channels), 
+                               nn.SiLU()])
+        
+        return nn.Sequential(*layers)
 
     def encode(self, enc_input: Tensor) -> List[Tensor]:
         """
@@ -2073,18 +1973,23 @@ class VAE_no_KL(nn.Module):
         features_down = []
         for i, module in enumerate(self.encoders_down):
             feature = module(feature)
-            if i in [0, 1, 2, 3]:
+            if i in self.fpn_encoders_down_idx:
                 features_down.append(feature)
 
-        features_down = self.encoder_fpn(features_down)
+        if features_down:
+            features_down = self.encoder_fpn(features_down)
 
         # breakpoint()
 
-        feature = self.encoders_up[0](feature)
-        feature = torch.cat([feature, features_down[-1]], dim=1)
-        feature = self.encoders_up[1](feature)
-        feature = torch.cat([feature, features_down[-2]], dim=1)
-        feature = self.encoders_up[2](feature)
+        features_down = features_down[::-1]
+        features_down_idx = 0
+        for i, module in enumerate(self.encoders_up):
+            if i in self.fpn_encoders_up_idx:
+                # print("idx: ", i, " feature: ", feature.shape, " features_down:", features_down[features_down_idx].shape)
+                feature = torch.cat([feature, features_down[features_down_idx]], dim=1)
+                features_down_idx += 1
+            feature = module(feature)
+
         return feature
         encode_channel = self.z_shape[0]
         mu = feature[:, :encode_channel, ...]
@@ -2094,17 +1999,27 @@ class VAE_no_KL(nn.Module):
 
     def decode(self, z: Tensor) -> Tensor:
         x = self.decoder_in_layer(z)
-        feature_down = [x]
+        # use -1 to denote decoder_in_layer as FPN layer
+        if -1 in self.fpn_decoders_down_idx:
+            feature_down = [x]
+        else:
+            feature_down = []
         for i, module in enumerate(self.decoders_down):
             x = module(x)
-            feature_down.append(x)
-        feature_down = self.decoder_fpn(feature_down[::-1])
+            if i in self.fpn_decoders_down_idx:
+                feature_down.append(x)
+        if feature_down:
+            feature_down = self.decoder_fpn(feature_down[::-1])
+        features_down_idx = 1
         for i, module in enumerate(self.decoders_up):
-            if i in [1, 2, 3]:
-                x = torch.cat([x, feature_down[-i]], dim=1)
+            if i in self.fpn_decoders_up_idx:
+                # print("idx: ", i, " x: ", x.shape, " feature_down:", feature_down[-features_down_idx].shape)
+                x = torch.cat([x, feature_down[-features_down_idx]], dim=1)
+                features_down_idx += 1
                 x = module(x)
             else:
                 x = module(x)
+
         if self.plane_dim == 5:
             plane_w = self.plane_shape[-1]
             x = torch.concat([x[..., idx * plane_w: (idx + 1) * plane_w].unsqueeze(1) for idx in range(self.num_triplane) ], dim=1)

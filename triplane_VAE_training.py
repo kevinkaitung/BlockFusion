@@ -125,7 +125,12 @@ if __name__ == "__main__":
                   "z_shape": [4, 32, 32],
                   "num_heads": 16,
                   "transform_depth": 1}
-    vae_model = VAE_no_KL(vae_config).cuda()
+    import autoencoder_config.triplane.model_a as cfg
+
+    vae_model = torch.nn.DataParallel(VAE_no_KL(cfg.vae_config, cfg.encoder_dims, cfg.feature_size_encoder, cfg.decoder_dims,
+                                                cfg.feature_size_decoder, cfg.fpn_encoders_layer_dim_idx, cfg.fpn_decoders_layer_dim_idx,
+                                                cfg.fpn_encoders_down_idx, cfg.fpn_encoders_up_idx, cfg.fpn_decoders_down_idx,
+                                                cfg.fpn_decoders_up_idx, cfg.block_config)).cuda()
     
     n_timesteps = 90
     batch_size = 9
@@ -135,9 +140,8 @@ if __name__ == "__main__":
     lr_gamma = 0.5
     epoch = 2500
     ckpt_freq = 1000
-    expname = "triplane_revised_autoencoder_training"
-    description = """2500 epochs training of revised autoencoder (no batchnorm after conv layers) on all volumes' triplanes.
-    Normalize raw triplanes' value range to -1~1 (global normalization based on the max and min value from all triplanes)"""
+    expname = "triplane_revised_autoencoder_training_test"
+    description = """Test"""
     
     # create directory for saving logs
     base_dir = "./logs"
