@@ -1916,6 +1916,8 @@ class VAE_no_KL(nn.Module):
                                             )
             layers.extend([transformer, 
                            nn.BatchNorm2d(inter_channels), 
+                            # nn.GroupNorm(num_groups, inter_channels),
+                            # nn.LayerNorm([inter_channels, feature_size, feature_size * 3]),
                            nn.SiLU()])
         
         #TODO: check whether the num_groups specified here is reasonable or not

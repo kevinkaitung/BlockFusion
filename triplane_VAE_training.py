@@ -6,12 +6,29 @@ import numpy as np
 import logging
 import argparse
 from datetime import datetime
+import importlib
 
-from autoencoder_2D_origin import VAE, VAE_no_KL
+from autoencoder_2D_origin import VAE_no_KL
 from timevarying_data_helper import LatentWeightDataset
 from fit_triplane.visualize_triplane import plot_single_channel
 
 check_plane_idx = 50
+vis_triplane_freq = 10
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train a autoencoder on triplanes")
+    parser.add_argument("--expname", type=str, default="triplane_revised_autoencoder_training_test", help="Experiment name")
+    parser.add_argument("--description", type=str, default="Test Model_a with layernorm after spatial transformer", help="Description to experiment")
+    parser.add_argument("--batch_size", type=int, default=4, help="Batch size for training")
+    parser.add_argument("--epochs", type=int, default=1000, help="Number of epochs to train")
+    parser.add_argument("--ckpt_freq", type=int, default=1000, help="Checkpoint frequency")
+    parser.add_argument("--init_lr", type=float, default=1e-3, help="Initial learning rate for training")
+    parser.add_argument("--lr_decay", type=int, default=3000, help="Learning rate decay frequency")
+    parser.add_argument("--lr_gamma", type=float, default=0.2, help="Learning rate decay factor")
+    parser.add_argument("--resume_training_dir", type=str, default=None, help="Directory to resume training from")
+    parser.add_argument("--resume_model_file_name", type=str, default=None, help="Model file name to resume training from")
+    parser.add_argument("--model_config", type=str, default="model_a", help="Model config file name")
+    return parser.parse_args()
 
 # redefinition of traning pipeline for multiple input volumes
 def train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_decay, lr_gamma, epochs=100, tensorboard_writer=None, console_logger=None, run_dir=None, ckpt_freq=100, resume_epoch=0):
@@ -42,7 +59,7 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_dec
                 output = vae_model(raw_data[0])
                 # output[0] = output[0].clamp(min, max)
                 # for debugging
-                if epoch % 100 == 99 or epoch < 5:
+                if epoch % vis_triplane_freq == (vis_triplane_freq - 1) or epoch < 5:
                     channel = 16
                     # for training on all volumes
                     if check_plane_idx in raw_data[1]:
@@ -119,34 +136,22 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_dec
         
 
 if __name__ == "__main__":
-    vae_config = {"kl_std": 0.25,
-                  "kl_weight": 0.001,
-                  "plane_shape": [3, 32, 128, 128],
-                  "z_shape": [4, 32, 32],
-                  "num_heads": 16,
-                  "transform_depth": 1}
-    import autoencoder_config.triplane.model_a as cfg
-
+    args = parse_args()
+    
+    cfg = importlib.import_module(f"autoencoder_config.triplane.{args.model_config}")
+    
     vae_model = torch.nn.DataParallel(VAE_no_KL(cfg.vae_config, cfg.encoder_dims, cfg.feature_size_encoder, cfg.decoder_dims,
                                                 cfg.feature_size_decoder, cfg.fpn_encoders_layer_dim_idx, cfg.fpn_decoders_layer_dim_idx,
                                                 cfg.fpn_encoders_down_idx, cfg.fpn_encoders_up_idx, cfg.fpn_decoders_down_idx,
                                                 cfg.fpn_decoders_up_idx, cfg.block_config)).cuda()
     
     n_timesteps = 90
-    batch_size = 9
     # batch_size = 1
-    init_lr = 0.0001
-    lr_decay = 250
-    lr_gamma = 0.5
-    epoch = 2500
-    ckpt_freq = 1000
-    expname = "triplane_revised_autoencoder_training_test"
-    description = """Test"""
     
     # create directory for saving logs
     base_dir = "./logs"
     os.makedirs(base_dir, exist_ok=True)
-    expname_dir = os.path.join(base_dir, expname)
+    expname_dir = os.path.join(base_dir, args.expname)
     os.makedirs(expname_dir, exist_ok=True)
     run_dir = os.path.join(expname_dir, datetime.now().strftime("%Y%m%d-%H%M%S"))
     os.makedirs(run_dir, exist_ok=True)
@@ -156,13 +161,12 @@ if __name__ == "__main__":
     from torch.utils.tensorboard import SummaryWriter
     tensorboard_writer = SummaryWriter(log_dir=run_dir)
     
-    # # prepare python logger
+    # prepare python logger
     logging.basicConfig(filename=os.path.join(run_dir, "console_log.log"),
                     format='%(asctime)s %(message)s',
                     filemode=logging_file_md)
     console_logger = logging.getLogger()
     console_logger.setLevel(logging.DEBUG)
-    console_logger.debug("Experiment description: " + description)
 
     # to suppress matplotlib logging
     logging.getLogger('matplotlib').setLevel(logging.WARNING)
@@ -171,11 +175,6 @@ if __name__ == "__main__":
     loaded_model = torch.load("fit_triplane/ch_32_saved_model.ckpt")
     triplane_weights = [loaded_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_timesteps)]
     triplane_weights = torch.cat(triplane_weights, dim=0)
-    # TODO: check whether it makes sense to pass vae_config["plane_shape"] into LatentWeightDataset
-    # since it is originally designed to receive latent weights in 3D space (hash grid)
-    # Need to check how does the original VAE receive input:
-    # [batch size, 3 (triplanes), #channels, res, res] or [batch size, #channels, res, res * 3 (triplanes)]
-    # seems both work(?)
     
     # normalize triplane value to -1, 1
     # normalization for training only one volume
@@ -191,8 +190,8 @@ if __name__ == "__main__":
         # test training for only one volume
         # triplane_weights[50:51],
         triplane_weights,
-        vae_config["plane_shape"]),
-        batch_size=batch_size,
+        cfg.vae_config["plane_shape"]),
+        batch_size=args.batch_size,
         shuffle=True)
     # input_tensor = torch.randn(2, 3, 32, 128, 128).cuda()
     input_tensor = next(iter(train_dataloader))[0].cuda()
@@ -204,7 +203,15 @@ if __name__ == "__main__":
     # samples = vae_model.sample(2)
     # print("samples shape: {}".format(samples[0].shape))
     
-    optimizer = torch.optim.Adam(vae_model.parameters(), lr=init_lr)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_decay, gamma=lr_gamma)
+    model_arch_str = str(vae_model)
+    tensorboard_writer.add_text("Model/Architecture", f"```\n{model_arch_str}\n```", global_step=0)
     
-    train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_decay, lr_gamma, epoch, tensorboard_writer, console_logger, run_dir, ckpt_freq, 0)
+    console_logger.debug("Experiment description: " + args.description)
+    console_logger.debug(f"Batch Size: {args.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
+    console_logger.debug(f"Initial Learning rate: {args.init_lr}, Learning rate decay frequency: {args.lr_decay}, Learning rate decay factor: {args.lr_gamma}")
+    console_logger.debug(f"Model config: autoencoder_config.triplane.{args.model_config}")
+    
+    optimizer = torch.optim.Adam(vae_model.parameters(), lr=args.init_lr)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.lr_decay, gamma=args.lr_gamma)
+    
+    train_vae(vae_model, train_dataloader, optimizer, scheduler, args.init_lr, args.lr_decay, args.lr_gamma, args.epochs, tensorboard_writer, console_logger, run_dir, args.ckpt_freq, 0)
