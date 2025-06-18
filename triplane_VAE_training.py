@@ -164,6 +164,9 @@ if __name__ == "__main__":
     console_logger.setLevel(logging.DEBUG)
     console_logger.debug("Experiment description: " + description)
 
+    # to suppress matplotlib logging
+    logging.getLogger('matplotlib').setLevel(logging.WARNING)
+
     # load pretrained tri-plane here
     loaded_model = torch.load("fit_triplane/ch_32_saved_model.ckpt")
     triplane_weights = [loaded_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_timesteps)]
