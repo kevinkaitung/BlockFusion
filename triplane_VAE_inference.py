@@ -6,22 +6,31 @@ import numpy as np
 import logging
 import argparse
 from datetime import datetime
+import importlib
 
 from autoencoder_2D_origin import VAE, VAE_no_KL
 from timevarying_data_helper import LatentWeightDataset
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Inference autoencoder on triplanes")
+    parser.add_argument("--expdir", type=str, default="./logs/test_hashencoding_train/20250508-024915", help="Checkpoint Directory to load the model from")
+    parser.add_argument("--model_file_name", type=str, default="vae_model_epoch_9999.ckpt", help="Model file name")
+    parser.add_argument("--model_config", type=str, default="model_a", help="Model config file name")
+    return parser.parse_args()
+
 if __name__ == "__main__":
-    vae_config = {"kl_std": 0.25,
-                  "kl_weight": 0.001,
-                  "plane_shape": [3, 32, 128, 128],
-                  "z_shape": [4, 32, 32],
-                  "num_heads": 16,
-                  "transform_depth": 1}
-    # TODO: should receive arguments to specify the location of pretrained model and other arguments
-    vae_model = VAE_no_KL(vae_config).cuda()
+    args = parse_args()
+    
+    # model configs are stored as python scripts, import the target config here
+    cfg = importlib.import_module(f"autoencoder_config.triplane.{args.model_config}")
+    
+    vae_model = VAE_no_KL(cfg.vae_config, cfg.encoder_dims, cfg.feature_size_encoder, cfg.decoder_dims,
+                        cfg.feature_size_decoder, cfg.fpn_encoders_layer_dim_idx, cfg.fpn_decoders_layer_dim_idx,
+                        cfg.fpn_encoders_down_idx, cfg.fpn_encoders_up_idx, cfg.fpn_decoders_down_idx,
+                        cfg.fpn_decoders_up_idx, cfg.block_config).cuda()
     # pretrained_vae_model = torch.load("logs/triplane_VAE_ch_32_single_volume/20250614-180226/vae_model_epoch_9999.ckpt")
-    pretrained_vae_model = torch.load("logs/triplane_revised_autoencoder_training/20250615-004012/vae_model_epoch_2499.ckpt")
-    vae_model.load_state_dict(pretrained_vae_model['model_state_dict'])
+    # pretrained_vae_model = torch.load("logs/triplane_AE_model_a/20250619-000758/vae_model_epoch_1399.ckpt")
+    vae_model.load_state_dict(torch.load(os.path.join(args.expdir, args.model_file_name))["model_state_dict"])
     
     n_timesteps = 90
     
@@ -48,7 +57,7 @@ if __name__ == "__main__":
     train_dataloader = torch.utils.data.DataLoader(
         LatentWeightDataset(
         triplane_weights,
-        vae_config["plane_shape"]),
+        cfg.vae_config["plane_shape"]),
         batch_size=1,
         shuffle=False)
     min, max = train_dataloader.dataset.get_value_range()
