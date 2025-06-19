@@ -13,7 +13,7 @@ from timevarying_data_helper import LatentWeightDataset
 from fit_triplane.visualize_triplane import plot_single_channel
 
 check_plane_idx = 50
-vis_triplane_freq = 10
+vis_triplane_freq = 100
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a autoencoder on triplanes")
