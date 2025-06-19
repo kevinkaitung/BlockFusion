@@ -23,15 +23,16 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=1000, help="Number of epochs to train")
     parser.add_argument("--ckpt_freq", type=int, default=1000, help="Checkpoint frequency")
     parser.add_argument("--init_lr", type=float, default=1e-3, help="Initial learning rate for training")
-    parser.add_argument("--lr_decay", type=int, default=3000, help="Learning rate decay frequency")
+    # parser.add_argument("--lr_decay", type=int, default=3000, help="Learning rate decay frequency")
     parser.add_argument("--lr_gamma", type=float, default=0.2, help="Learning rate decay factor")
+    parser.add_argument("--patience", type=int, default=150, help="Number of patience epochs to decay learning rate")
     parser.add_argument("--resume_training_dir", type=str, default=None, help="Directory to resume training from")
     parser.add_argument("--resume_model_file_name", type=str, default=None, help="Model file name to resume training from")
     parser.add_argument("--model_config", type=str, default="model_a", help="Model config file name")
     return parser.parse_args()
 
 # redefinition of traning pipeline for multiple input volumes
-def train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_decay, lr_gamma, epochs=100, tensorboard_writer=None, console_logger=None, run_dir=None, ckpt_freq=100, resume_epoch=0):
+def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100, tensorboard_writer=None, console_logger=None, run_dir=None, ckpt_freq=100, resume_epoch=0):
 
     vae_model.train()
     
@@ -110,7 +111,7 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_dec
             tensorboard_writer.add_scalar("Learning Rate", scheduler.get_last_lr()[0], epoch)
         
         # adjust learning rate
-        scheduler.step()
+        scheduler.step(last_recon_loss)
         
         # save the model at checkpoint
         if (epoch % ckpt_freq == (ckpt_freq - 1)) or (epoch == (epochs + resume_epoch) - 1):
@@ -119,9 +120,6 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, init_lr, lr_dec
                 'model_state_dict': vae_model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'scheduler_state_dict': scheduler.state_dict(),
-                'init_lr': init_lr,
-                'lr_decay': lr_decay,
-                'lr_gamma': lr_gamma,
                 'loss': last_loss,
                 'recon_loss': last_recon_loss,
                 'kl_loss': last_kl_loss,
@@ -208,10 +206,10 @@ if __name__ == "__main__":
     
     console_logger.debug("Experiment description: " + args.description)
     console_logger.debug(f"Batch Size: {args.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
-    console_logger.debug(f"Initial Learning rate: {args.init_lr}, Learning rate decay frequency: {args.lr_decay}, Learning rate decay factor: {args.lr_gamma}")
+    console_logger.debug(f"Initial Learning rate: {args.init_lr}, Patience Epochs: {args.patience}, Learning rate Decay Factor: {args.lr_gamma}")
     console_logger.debug(f"Model config: autoencoder_config.triplane.{args.model_config}")
     
     optimizer = torch.optim.Adam(vae_model.parameters(), lr=args.init_lr)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.lr_decay, gamma=args.lr_gamma)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode='min', factor=args.lr_gamma, patience=args.patience)
     
-    train_vae(vae_model, train_dataloader, optimizer, scheduler, args.init_lr, args.lr_decay, args.lr_gamma, args.epochs, tensorboard_writer, console_logger, run_dir, args.ckpt_freq, 0)
+    train_vae(vae_model, train_dataloader, optimizer, scheduler, args.epochs, tensorboard_writer, console_logger, run_dir, args.ckpt_freq, 0)
