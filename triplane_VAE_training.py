@@ -146,14 +146,22 @@ if __name__ == "__main__":
     n_timesteps = 90
     # batch_size = 1
     
-    # create directory for saving logs
-    base_dir = "./logs"
-    os.makedirs(base_dir, exist_ok=True)
-    expname_dir = os.path.join(base_dir, args.expname)
-    os.makedirs(expname_dir, exist_ok=True)
-    run_dir = os.path.join(expname_dir, datetime.now().strftime("%Y%m%d-%H%M%S"))
-    os.makedirs(run_dir, exist_ok=True)
-    logging_file_md = 'w'
+    # resume training from ckpt
+    if args.resume_training_dir and args.resume_model_file_name:
+        run_dir = args.resume_training_dir
+        logging_file_md = 'a'
+        loaded_ckpt = torch.load(os.path.join(args.resume_training_dir, args.resume_model_file_name))
+    elif (args.resume_training_dir and not args.resume_model_file_name) or (not args.resume_training_dir and args.resume_model_file_name):
+        RuntimeError("Missing resume training directory or model file name to resume training")
+    else:
+        # create directory for saving logs
+        base_dir = "./logs"
+        os.makedirs(base_dir, exist_ok=True)
+        expname_dir = os.path.join(base_dir, args.expname)
+        os.makedirs(expname_dir, exist_ok=True)
+        run_dir = os.path.join(expname_dir, datetime.now().strftime("%Y%m%d-%H%M%S"))
+        os.makedirs(run_dir, exist_ok=True)
+        logging_file_md = 'w'
     
     # create tensorboard logger
     from torch.utils.tensorboard import SummaryWriter
@@ -202,14 +210,39 @@ if __name__ == "__main__":
     # print("samples shape: {}".format(samples[0].shape))
     
     model_arch_str = str(vae_model)
-    tensorboard_writer.add_text("Model/Architecture", f"```\n{model_arch_str}\n```", global_step=0)
-    
-    console_logger.debug("Experiment description: " + args.description)
-    console_logger.debug(f"Batch Size: {args.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
-    console_logger.debug(f"Initial Learning rate: {args.init_lr}, Patience Epochs: {args.patience}, Learning rate Decay Factor: {args.lr_gamma}")
-    console_logger.debug(f"Model config: autoencoder_config.triplane.{args.model_config}")
     
     optimizer = torch.optim.Adam(vae_model.parameters(), lr=args.init_lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode='min', factor=args.lr_gamma, patience=args.patience)
     
-    train_vae(vae_model, train_dataloader, optimizer, scheduler, args.epochs, tensorboard_writer, console_logger, run_dir, args.ckpt_freq, 0)
+    # resume training
+    if args.resume_training_dir and args.resume_model_file_name:
+        resume_epoch = loaded_ckpt["epoch"] + 1
+        console_logger.debug(f"Resume training from {args.resume_training_dir}/{args.resume_model_file_name} at Epoch {resume_epoch}")
+        console_logger.debug(f"Batch Size: {args.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
+        vae_model.load_state_dict(loaded_ckpt["model_state_dict"])
+        optimizer.load_state_dict(loaded_ckpt["optimizer_state_dict"])
+        # check whether users pass lr for resume training
+        import sys
+        if "--init_lr" in sys.argv and "--lr_gamma" in sys.argv and "--patience" in sys.argv:
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = args.init_lr
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode='min', factor=args.lr_gamma, patience=args.patience)
+            console_logger.debug(f"Reset learning rate to {args.init_lr}, patience epochs to {args.patience}, learning rate decay factor to {args.lr_gamma}")
+        elif "--init_lr" in sys.argv or "--lr_gamma" in sys.argv or "--patience" in sys.argv:
+            raise RuntimeError("Only reset either init_lr, lr_gamma, or patience for resuming training, please reset three arguments at the same time")
+        else:
+            scheduler.load_state_dict(loaded_ckpt["scheduler_state_dict"])
+            console_logger.debug(f"Use original learning rate and scheduler settings")
+        
+    # training from scratch
+    else:
+        resume_epoch = 0
+        tensorboard_writer.add_text("Model/Architecture", f"```\n{model_arch_str}\n```", global_step=0)
+    
+        console_logger.debug("Experiment description: " + args.description)
+        console_logger.debug(f"Batch Size: {args.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
+        console_logger.debug(f"Initial Learning rate: {args.init_lr}, Patience Epochs: {args.patience}, Learning rate Decay Factor: {args.lr_gamma}")
+        console_logger.debug(f"Model config: autoencoder_config.triplane.{args.model_config}")
+    
+    
+    train_vae(vae_model, train_dataloader, optimizer, scheduler, args.epochs, tensorboard_writer, console_logger, run_dir, args.ckpt_freq, resume_epoch)
