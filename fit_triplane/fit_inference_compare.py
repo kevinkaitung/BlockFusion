@@ -16,16 +16,39 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 from timevarying_data_helper import TimevaryingDataset
 
+def inference(train_dataloader, coords, value_range, triplane, net, timestep_to_store, filename_prefix):
+    psnr_list = []
+    ssim_list = []
+    
+    # from torchmetrics.functional.image import structural_similarity_index_measure
+    with torch.no_grad():
+        for batch_idx, raw_data in enumerate(train_dataloader):
+            outputs = net(triplane[batch_idx](coords, 0))
+            outputs = outputs.view(raw_data.shape)
+            loss = F.mse_loss(outputs, raw_data)
+            psnr_list.append(20 * torch.log10(value_range / torch.sqrt(loss)))
+            # import pdb; pdb.set_trace()
+            # ssim_list.append(structural_similarity_index_measure(outputs, raw_data, data_range=1.0).item())
+            if batch_idx == timestep_to_store:
+                outputs.detach().cpu().numpy().astype(np.float32).tofile(f"{filename_prefix}_recons_at_timestep_{batch_idx}.bin")
+                raw_data.detach().cpu().numpy().astype(np.float32).tofile(f"raw_volume_at_timestep_{batch_idx}.bin")
+    return psnr_list
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='base_timevarying.json')
+    parser.add_argument('--timesteps_to_store', type=int, default=50)
+    parser.add_argument('--result_plot_name', type=str, default="psnr_plot")
     args = parser.parse_args()
 
     with open(args.config, 'r') as f:
         config = json.load(f)
     config = edict(config)
     # assert len(config.fixmlp) > 0
+    
+    n_timesteps = 90
+    data_res = [128, 128, 128]
 
     net = Network(
         d_in=config.channel,
@@ -35,8 +58,6 @@ if __name__ == "__main__":
         init_type="geo_init",
     ).cuda()
 
-    n_timesteps = 90
-    data_res = [128, 128, 128]
     # instantiate multiple triplanes (each timestep has its own triplane)
     triplane = [Triplane(
         reso=config.resolution,
@@ -58,15 +79,14 @@ if __name__ == "__main__":
         ),
         batch_size=1,
         shuffle=False)
-    # TODO: value range should be retrieve from SampleTimevaryingDataset class (which is more reasonable)
+    # TODO: value range should be retrieve from TimevaryingDataset class (which is more reasonable)
     value_range = 1.0
 
     # loaded_model = torch.load("ch_32_saved_model.ckpt")
     # loaded_model = torch.load("../VAE_Reconstructed_triplane.pt")
     # loaded_model = torch.load("../Diffusion_Reconstructed_triplane.pt")
-    loaded_model = torch.load("../VAE_Reconstructed_triplane_ch_32.pt")
-    net.load_state_dict(loaded_model['net_state_dict'])
-    triplane.load_state_dict(loaded_model['triplane_state_dict'])
+    loaded_model_vae_recon = torch.load("../VAE_Reconstructed_triplane_ch_32.pt")
+    loaded_model_triplane_org = torch.load("ch_32_saved_model.ckpt")
 
     # generate grid for reconstruction
     with torch.no_grad():
@@ -81,32 +101,26 @@ if __name__ == "__main__":
         coords = coords.reshape([-1, 3])
         coords = coords.cuda()
     
-    # from torchmetrics.functional.image import structural_similarity_index_measure
+    net.load_state_dict(loaded_model_vae_recon['net_state_dict'])
+    triplane.load_state_dict(loaded_model_vae_recon['triplane_state_dict'])
+    psnr_vae_recon = inference(train_dataloader, coords, value_range, triplane, net, args.timesteps_to_store, "vae_recon")
     
-    psnr_list = []
-    ssim_list = []
+    net.load_state_dict(loaded_model_triplane_org['net_state_dict'])
+    triplane.load_state_dict(loaded_model_triplane_org['triplane_state_dict'])
+    psnr_triplane_org = inference(train_dataloader, coords, value_range, triplane, net, args.timesteps_to_store, "triplane_org")
     
-    with torch.no_grad():
-        for batch_idx, raw_data in enumerate(train_dataloader):
-            outputs = net(triplane[batch_idx](coords, 0))
-            outputs = outputs.view(raw_data.shape)
-            loss = F.mse_loss(outputs, raw_data)
-            psnr_list.append(20 * torch.log10(value_range / torch.sqrt(loss)))
-            # import pdb; pdb.set_trace()
-            # ssim_list.append(structural_similarity_index_measure(outputs, raw_data, data_range=1.0).item())
-            if batch_idx == 50:
-                outputs.detach().cpu().numpy().astype(np.float32).tofile("pred.bin")
-    for i in range(len(psnr_list)):
-        print(f"timestep {i} - PSNR: {psnr_list[i]}")
+    for idx, (vae, triplane) in enumerate(zip(psnr_vae_recon, psnr_triplane_org)):
+        print(f"timestep {idx} - AE Reconstructed PSNR: {vae}, Triplane Original PSNR: {triplane}")
         # print(psnr_list[i], ssim_list[i])
-    # After the PSNR printing loop, add:
     
+    # After the PSNR printing loop, add:
     plt.figure(figsize=(10, 6))
-    plt.plot(range(len(psnr_list)), psnr_list, label='PSNR')
+    plt.plot(range(len(psnr_triplane_org)), psnr_triplane_org, label='Triplane Original PSNR')
+    plt.plot(range(len(psnr_vae_recon)), psnr_vae_recon, label='AE Reconstructed PSNR')
     plt.xlabel('Timestep')
     plt.ylabel('PSNR (dB)')
     plt.title('PSNR across Timesteps')
     plt.grid(True)
     plt.legend()
-    plt.savefig('psnr_plot.png')
+    plt.savefig(f'{args.result_plot_name}.png')
     plt.close()
