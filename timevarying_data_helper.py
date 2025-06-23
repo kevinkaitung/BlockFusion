@@ -188,7 +188,7 @@ class LatentWeightDataset(torch.utils.data.Dataset):
         self.n_params = latent_weights.shape[0]
         
         # need to reshape from flatten input back to VAE recieve
-        self.latent_weights = self.latent_weights.reshape([self.n_params, z_shape[0], z_shape[1], z_shape[2], z_shape[3]])
+        self.latent_weights = self.latent_weights.reshape([self.n_params] + [z_shape[idx] for idx in range(len(z_shape))])
         
     def __getitem__(self, index):
         return self.latent_weights[index], index
