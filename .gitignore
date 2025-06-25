@@ -6,3 +6,6 @@ __pycache__
 *.bin
 
 *.pt
+
+# images in fit_triplane are for debugging
+fit_triplane/*.png
