@@ -23,7 +23,7 @@ if __name__ == "__main__":
     parser.add_argument('--config', type=str, default='base_timevarying.json')
     parser.add_argument('--triplane_file_path', type=str, default="../logs/UNet_diffusion_exp/20250624-162156/Diffusion_VAE_Reconstructed_triplane.pt")
     parser.add_argument('--timesteps_to_store', type=int, default=50)
-    parser.add_argument('--result_plot_name', type=str, default="psnr_plot")
+    parser.add_argument('--result_plot_path', type=str, default="psnr_plot.png")
     args = parser.parse_args()
 
     with open(args.config, 'r') as f:
@@ -114,5 +114,5 @@ if __name__ == "__main__":
     plt.title('PSNR across Timesteps')
     plt.grid(True)
     plt.legend()
-    plt.savefig(f'{args.result_plot_name}.png')
+    plt.savefig(args.result_plot_path)
     plt.close()
