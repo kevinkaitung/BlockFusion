@@ -8,6 +8,7 @@ import os, sys
 import json
 from fit import Triplane, Network
 import matplotlib.pyplot as plt
+from visualize_triplane import plot_single_channel
 
 # Add parent directory to sys.path
 # TODO: make it more flexible to call timevarying_data_helper anywhere
@@ -20,6 +21,9 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='base_timevarying.json')
+    parser.add_argument('--triplane_file_path', type=str, default="../logs/UNet_diffusion_exp/20250624-162156/Diffusion_VAE_Reconstructed_triplane.pt")
+    parser.add_argument('--timesteps_to_store', type=int, default=50)
+    parser.add_argument('--result_plot_name', type=str, default="psnr_plot")
     args = parser.parse_args()
 
     with open(args.config, 'r') as f:
@@ -64,7 +68,9 @@ if __name__ == "__main__":
     # loaded_model = torch.load("ch_32_saved_model.ckpt")
     # loaded_model = torch.load("../VAE_Reconstructed_triplane.pt")
     # loaded_model = torch.load("../Diffusion_Reconstructed_triplane.pt")
-    loaded_model = torch.load("../VAE_Reconstructed_triplane_ch_32.pt")
+    # loaded_model = torch.load("../VAE_Reconstructed_triplane_ch_32.pt")
+    # loaded_model = torch.load("../logs/triplane_AE_model_a/20250619-000758/Diffusion_VAE_Reconstructed_triplane.pt")
+    loaded_model = torch.load(args.triplane_file_path)
     net.load_state_dict(loaded_model['net_state_dict'])
     triplane.load_state_dict(loaded_model['triplane_state_dict'])
 
@@ -94,12 +100,12 @@ if __name__ == "__main__":
             psnr_list.append(20 * torch.log10(value_range / torch.sqrt(loss)))
             # import pdb; pdb.set_trace()
             # ssim_list.append(structural_similarity_index_measure(outputs, raw_data, data_range=1.0).item())
-            if batch_idx == 50:
-                outputs.detach().cpu().numpy().astype(np.float32).tofile("pred.bin")
+            if batch_idx == args.timesteps_to_store:
+                outputs.detach().cpu().numpy().astype(np.float32).tofile(f"pred_at_timestep_{batch_idx}.bin")
+    
     for i in range(len(psnr_list)):
         print(f"timestep {i} - PSNR: {psnr_list[i]}")
         # print(psnr_list[i], ssim_list[i])
-    # After the PSNR printing loop, add:
     
     plt.figure(figsize=(10, 6))
     plt.plot(range(len(psnr_list)), psnr_list, label='PSNR')
@@ -108,5 +114,5 @@ if __name__ == "__main__":
     plt.title('PSNR across Timesteps')
     plt.grid(True)
     plt.legend()
-    plt.savefig('psnr_plot.png')
+    plt.savefig(f'{args.result_plot_name}.png')
     plt.close()
