@@ -222,6 +222,8 @@ if __name__ == "__main__":
         vae_model.load_state_dict(loaded_ckpt["model_state_dict"])
         optimizer.load_state_dict(loaded_ckpt["optimizer_state_dict"])
         # check whether users pass lr for resume training
+        # TODO: this doesn't work if passing argument like this in command line: --init_lr=0.0001
+        # only works like this: --init_lr 0.0001
         import sys
         if "--init_lr" in sys.argv and "--lr_gamma" in sys.argv and "--patience" in sys.argv:
             for param_group in optimizer.param_groups:
