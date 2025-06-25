@@ -11,6 +11,15 @@ import importlib
 from autoencoder_2D_origin import VAE, VAE_no_KL
 from timevarying_data_helper import LatentWeightDataset
 
+# for debugging
+import matplotlib.pyplot as plt
+def plot_single_channel(data):
+    plt.imshow(data.cpu().numpy(), cmap='viridis')
+    plt.colorbar()
+    plt.title("2D Tensor Visualization")
+    plt.savefig("test.png")
+    plt.close()
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Inference autoencoder on triplanes")
     parser.add_argument("--expdir", type=str, default="./logs/test_hashencoding_train/20250508-024915", help="Checkpoint Directory to load the model from")
@@ -107,5 +116,6 @@ if __name__ == "__main__":
             # since we only use one diffusion-generated sample, copy it for all timesteps
             # replace original triplanes with the newly generated ones, and store as new triplanes
             # TODO:
+            # pretrained_triplane_model['triplane_state_dict'][f"{idx}.triplane"] = outputs[idx % 8:idx % 8 + 1]
             pretrained_triplane_model['triplane_state_dict'][f"{idx}.triplane"] = outputs[:1]
-        torch.save(pretrained_triplane_model, os.path.join(args.expdir, "Diffusion_VAE_Reconstructed_triplane.pt"))
+        torch.save(pretrained_triplane_model, os.path.join(args.diffusion_dir, "Diffusion_VAE_Reconstructed_triplane.pt"))
