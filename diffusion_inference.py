@@ -42,8 +42,9 @@ if __name__ == "__main__":
             # rest of the arguments uses default values
         ).cuda()
     
-    model.load_state_dict(torch.load(os.path.join(args.expdir, args.model_file_name))["model_state_dict"]).cuda()
-    model.eval()
+    model.load_state_dict(torch.load(os.path.join(args.expdir, args.model_file_name))["model_state_dict"])
+    model = model.cuda().eval()
+    # model.eval()
 
     # pretrained_triplane_model = torch.load("fit_triplane/ch_32_saved_model.ckpt")
     latent_triplanes = torch.load(os.path.join(args.latent_triplanes_dir, "latent_triplanes.pt"))
