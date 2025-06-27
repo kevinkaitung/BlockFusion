@@ -3,8 +3,8 @@
 
 # setup VAE model hyperparameters
 vae_config = {
-            # "kl_std": 0.25,
-            # "kl_weight": 0.001,
+            "kl_std": 0.25,
+            "kl_weight": 0.001,
             # 3 planes (xy, yz, xz) * 32 channels (feature vectors) * 128x128
             "plane_shape": [3, 32, 128, 128],
             "z_shape": [4, 32, 32],
@@ -15,7 +15,7 @@ vae_config = {
 # encoder_in_channels = 64
 #                   idx:0,   1,   2,   3,   4,  5,   6,  7,     8,     9
 # encoder_dims =         [32, 64, 128, 256, 512, 1024, 512, 256, 128,  2 * vae_config["z_shape"][0]]
-encoder_dims =         [128, 512, 512, 1024, 1024, 1024, 1024, 1024,  vae_config["z_shape"][0]]
+encoder_dims =         [128, 512, 512, 1024, 1024, 1024, 1024, 1024,  2 * vae_config["z_shape"][0]]
 feature_size_encoder = [128,  64,  32,   16,    8,    4,    8,   16,  vae_config["z_shape"][1]]
 
 encoders_down_end_idx = 5
