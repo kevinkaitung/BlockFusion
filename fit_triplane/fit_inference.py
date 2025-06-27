@@ -97,7 +97,7 @@ if __name__ == "__main__":
             outputs = net(triplane[batch_idx](coords, 0))
             outputs = outputs.view(raw_data.shape)
             loss = F.mse_loss(outputs, raw_data)
-            psnr_list.append(20 * torch.log10(value_range / torch.sqrt(loss)))
+            psnr_list.append((20 * torch.log10(value_range / torch.sqrt(loss))).item())
             # import pdb; pdb.set_trace()
             # ssim_list.append(structural_similarity_index_measure(outputs, raw_data, data_range=1.0).item())
             if batch_idx == args.timesteps_to_store:
