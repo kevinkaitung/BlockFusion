@@ -30,7 +30,7 @@ if __name__ == "__main__":
                         cfg.fpn_decoders_up_idx, cfg.block_config)).cuda()
     # pretrained_vae_model = torch.load("logs/triplane_VAE_ch_32_single_volume/20250614-180226/vae_model_epoch_9999.ckpt")
     # pretrained_vae_model = torch.load("logs/triplane_AE_model_a/20250619-000758/vae_model_epoch_1399.ckpt")
-    vae_model.load_state_dict(torch.load(os.path.join(args.expdir, args.model_file_name))["model_state_dict"])
+    vae_model.load_state_dict(torch.load(os.path.join(args.expdir, args.model_file_name), weights_only=False)["model_state_dict"])
     
     n_timesteps = 90
     
@@ -65,12 +65,12 @@ if __name__ == "__main__":
     # input_tensor = torch.randn(2, 3, 32, 128, 128).cuda()
     input_tensor = next(iter(train_dataloader))[0].cuda()
     out = vae_model(input_tensor)
-    # loss = vae_model.loss_function(*out)
-    # print("loss: {}".format(loss))
+    loss = vae_model.module.loss_function(*out)
+    print("loss: {}".format(loss))
     print("z shape: {}".format(out[-1].shape))
     print("reconstruct shape: {}".format(out[0].shape))
-    # samples = vae_model.sample(2)
-    # print("samples shape: {}".format(samples[0].shape))
+    samples = vae_model.module.sample(2)
+    print("samples shape: {}".format(samples[0].shape))
     # to make batchnorm function correctly for inference, need to call eval
     vae_model.eval()
     with torch.no_grad():
@@ -79,12 +79,12 @@ if __name__ == "__main__":
             output = vae_model(raw_data[0])
             # reconstructed results is the first element of the output (output[0])
             recon_loss = F.mse_loss(output[0], raw_data[0])
-            # kl_loss = vae_model.loss_function(*output)
-            # loss = recon_loss + kl_loss
-            loss = recon_loss
+            kl_loss = vae_model.module.loss_function(*output)
+            loss = recon_loss + kl_loss
+            # loss = recon_loss
             
-            # print(f"Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}")
-            print(f"Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}")
+            print(f"Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}")
+            # print(f"Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}")
             # import pdb; pdb.set_trace()
             # normalize output from -1~1 back to its original value range to align with the value range of triplane fitting
             output[0] = ((output[0] - min) / (max - min)) * (original_max - original_min) + original_min

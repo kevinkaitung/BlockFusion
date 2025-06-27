@@ -1806,6 +1806,9 @@ class VAE_no_KL(nn.Module):
                  fpn_decoders_layer_dim_idx, fpn_encoders_down_idx, fpn_encoders_up_idx, fpn_decoders_down_idx, fpn_decoders_up_idx, block_config, is_single_triplane=False) -> None:
         super(VAE_no_KL, self).__init__()
 
+        kl_std = vae_config.get("kl_std", 0.25)
+        kl_weight = vae_config.get("kl_weight", 0.001)
+        
         plane_shape = vae_config.get("plane_shape", [3, 32, 256, 256])
         z_shape = vae_config.get("z_shape", [4, 64, 64])
         num_heads = vae_config.get("num_heads", 16)
@@ -1823,6 +1826,9 @@ class VAE_no_KL(nn.Module):
         self.plane_dim = len(plane_shape) + 1
         self.plane_shape = plane_shape
         self.z_shape = z_shape
+        
+        self.kl_std = kl_std
+        self.kl_weight = kl_weight
 
         self.num_heads = num_heads
         self.transform_depth = transform_depth
@@ -1992,7 +1998,7 @@ class VAE_no_KL(nn.Module):
                 features_down_idx += 1
             feature = module(feature)
 
-        return feature
+        # return feature
         encode_channel = self.z_shape[0]
         mu = feature[:, :encode_channel, ...]
         log_var = feature[:, encode_channel:, ...]
@@ -2043,13 +2049,13 @@ class VAE_no_KL(nn.Module):
         return eps * std + mu
 
     def forward(self, data: Tensor, **kwargs) -> Tensor:
-        # mu, log_var = self.encode(data)
-        # z = self.reparameterize(mu, log_var)
-        z = self.encode(data)
+        mu, log_var = self.encode(data)
+        z = self.reparameterize(mu, log_var)
+        # z = self.encode(data)
         result = self.decode(z)
 
-        # return [result, data, mu, log_var, z]
-        return [result, data, None, None, z]
+        return [result, data, mu, log_var, z]
+        # return [result, data, None, None, z]
 
     # only using VAE loss
     def loss_function(self,

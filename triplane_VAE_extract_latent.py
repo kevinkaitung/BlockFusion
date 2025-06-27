@@ -47,7 +47,7 @@ if __name__ == "__main__":
                         cfg.fpn_decoders_up_idx, cfg.block_config)).cuda()
     # pretrained_vae_model = torch.load("logs/triplane_VAE_ch_32_single_volume/20250614-180226/vae_model_epoch_9999.ckpt")
     # pretrained_vae_model = torch.load("logs/triplane_AE_model_a/20250619-000758/vae_model_epoch_1399.ckpt")
-    vae_model.load_state_dict(torch.load(os.path.join(args.expdir, args.model_file_name))["model_state_dict"])
+    vae_model.load_state_dict(torch.load(os.path.join(args.expdir, args.model_file_name), weights_only=False)["model_state_dict"])
     
     n_timesteps = 90
     
@@ -101,7 +101,9 @@ if __name__ == "__main__":
         for batch_idx, raw_data in enumerate(train_dataloader):
             
             if is_encode:
-                output = vae_model.module.encode(raw_data[0])
+                mu, log_var = vae_model.module.encode(raw_data[0])
+                output = vae_model.module.reparameterize(mu, log_var)
+                # output = vae_model.module.encode(raw_data[0])
             else:
                 # TODO: check the data shape of raw_data when decoding
                 output = vae_model.module.decode(raw_data[0])
