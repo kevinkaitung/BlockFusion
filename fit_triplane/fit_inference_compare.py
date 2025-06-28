@@ -40,6 +40,10 @@ if __name__ == "__main__":
     parser.add_argument('--config', type=str, default='base_timevarying.json')
     parser.add_argument('--timesteps_to_store', type=int, default=50)
     parser.add_argument('--result_plot_name', type=str, default="psnr_plot")
+    parser.add_argument('--triplane_file_path_1', type=str, default="../VAE_Reconstructed_triplane.pt")
+    parser.add_argument('--triplane_file_path_2', type=str, default="ch_32_saved_model.ckpt")
+    parser.add_argument('--triplane_recon_type_1', type=str, default='vae_recon')
+    parser.add_argument('--triplane_recon_type_2', type=str, default='triplane_org')
     args = parser.parse_args()
 
     with open(args.config, 'r') as f:
@@ -85,8 +89,8 @@ if __name__ == "__main__":
     # loaded_model = torch.load("ch_32_saved_model.ckpt")
     # loaded_model = torch.load("../VAE_Reconstructed_triplane.pt")
     # loaded_model = torch.load("../Diffusion_Reconstructed_triplane.pt")
-    loaded_model_vae_recon = torch.load("../VAE_Reconstructed_triplane_ch_32.pt")
-    loaded_model_triplane_org = torch.load("ch_32_saved_model.ckpt")
+    loaded_model_1 = torch.load(args.triplane_file_path_1)
+    loaded_model_2 = torch.load(args.triplane_file_path_2)
 
     # generate grid for reconstruction
     with torch.no_grad():
@@ -101,22 +105,22 @@ if __name__ == "__main__":
         coords = coords.reshape([-1, 3])
         coords = coords.cuda()
     
-    net.load_state_dict(loaded_model_vae_recon['net_state_dict'])
-    triplane.load_state_dict(loaded_model_vae_recon['triplane_state_dict'])
-    psnr_vae_recon = inference(train_dataloader, coords, value_range, triplane, net, args.timesteps_to_store, "vae_recon")
+    net.load_state_dict(loaded_model_1['net_state_dict'])
+    triplane.load_state_dict(loaded_model_1['triplane_state_dict'])
+    psnr_model_1 = inference(train_dataloader, coords, value_range, triplane, net, args.timesteps_to_store, args.triplane_recon_type_1)
     
-    net.load_state_dict(loaded_model_triplane_org['net_state_dict'])
-    triplane.load_state_dict(loaded_model_triplane_org['triplane_state_dict'])
-    psnr_triplane_org = inference(train_dataloader, coords, value_range, triplane, net, args.timesteps_to_store, "triplane_org")
+    net.load_state_dict(loaded_model_2['net_state_dict'])
+    triplane.load_state_dict(loaded_model_2['triplane_state_dict'])
+    psnr_model_2 = inference(train_dataloader, coords, value_range, triplane, net, args.timesteps_to_store, args.triplane_recon_type_2)
     
-    for idx, (vae, triplane) in enumerate(zip(psnr_vae_recon, psnr_triplane_org)):
-        print(f"timestep {idx} - AE Reconstructed PSNR: {vae}, Triplane Original PSNR: {triplane}")
+    for idx, (vae, triplane) in enumerate(zip(psnr_model_1, psnr_model_2)):
+        print(f"timestep {idx} - {args.triplane_recon_type_1} PSNR: {vae}, {args.triplane_recon_type_2} PSNR: {triplane}")
         # print(psnr_list[i], ssim_list[i])
     
     # After the PSNR printing loop, add:
     plt.figure(figsize=(10, 6))
-    plt.plot(range(len(psnr_triplane_org)), psnr_triplane_org, label='Triplane Original PSNR')
-    plt.plot(range(len(psnr_vae_recon)), psnr_vae_recon, label='AE Reconstructed PSNR')
+    plt.plot(range(len(psnr_model_2)), psnr_model_2, label=f'{args.triplane_recon_type_2} PSNR')
+    plt.plot(range(len(psnr_model_1)), psnr_model_1, label=f'{args.triplane_recon_type_1} PSNR')
     plt.xlabel('Timestep')
     plt.ylabel('PSNR (dB)')
     plt.title('PSNR across Timesteps')
