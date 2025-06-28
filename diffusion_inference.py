@@ -10,12 +10,23 @@ import argparse
 from diffusers import Conv3DAwareUNet  # or any U-Net class you used
 
 import matplotlib.pyplot as plt
-def plot_single_channel(data):
+def plot_single_channel(data, path_to_save):
     plt.imshow(data.cpu().numpy(), cmap='viridis')
     plt.colorbar()
     plt.title("2D Tensor Visualization")
-    plt.savefig("test.png")
+    plt.savefig(path_to_save)
     plt.close()
+    
+def plot_histogram(data, path_to_save):
+    # Plot histogram
+    plt.hist(data.cpu().numpy().flatten(), bins=100, density=True)
+    plt.title("Tensor Value Distribution")
+    plt.xlabel("Value")
+    plt.ylabel("Density")
+    plt.grid(True)
+    plt.savefig(path_to_save)
+    plt.close()
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="UNet Diffusion Inference for latent triplanes")
