@@ -9,3 +9,4 @@ __pycache__
 
 # images in fit_triplane are for debugging
 fit_triplane/*.png
+fit_triplane/exp_results
