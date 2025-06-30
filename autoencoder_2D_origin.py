@@ -2001,7 +2001,10 @@ class VAE_no_KL(nn.Module):
         # return feature
         encode_channel = self.z_shape[0]
         mu = feature[:, :encode_channel, ...]
-        log_var = feature[:, encode_channel:, ...]
+        if self.kl_weight != 0.0:
+            log_var = feature[:, encode_channel:, ...]
+        else:
+            log_var = None
 
         return [mu, log_var]
 
@@ -2043,10 +2046,13 @@ class VAE_no_KL(nn.Module):
         return x
 
     def reparameterize(self, mu: Tensor, logvar: Tensor) -> Tensor:
-
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return eps * std + mu
+        if logvar != None:
+            std = torch.exp(0.5 * logvar)
+            eps = torch.randn_like(std)
+            return eps * std + mu
+        # if logvar == None, it means no KL-reg, just return mu
+        else:
+            return mu
 
     def forward(self, data: Tensor, **kwargs) -> Tensor:
         mu, log_var = self.encode(data)
@@ -2062,6 +2068,10 @@ class VAE_no_KL(nn.Module):
                       *args) -> dict:
         mu = args[2]
         log_var = args[3]
+        
+        if log_var == None:
+            # no KL-reg
+            return torch.tensor(0.0, device=mu.device)
 
         if self.kl_std == 'zero_mean':
             latent = self.reparameterize(mu, log_var)
