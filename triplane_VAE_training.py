@@ -13,7 +13,8 @@ from timevarying_data_helper import LatentWeightDataset
 from fit_triplane.visualize_triplane import plot_single_channel
 
 check_plane_idx = 50
-vis_triplane_freq = 50
+early_vis_triplane_freq = 10
+late_vis_triplane_freq = 50
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a autoencoder on triplanes")
@@ -60,7 +61,7 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100, ten
                 output = vae_model(raw_data[0])
                 # output[0] = output[0].clamp(min, max)
                 # for debugging
-                if epoch % vis_triplane_freq == (vis_triplane_freq - 1) or epoch < 5:
+                if ((epoch % late_vis_triplane_freq == (late_vis_triplane_freq - 1)) and epoch > 100) or ((epoch % early_vis_triplane_freq == (early_vis_triplane_freq - 1)) and epoch <= 100) or (epoch < 5):
                     channel = 16
                     # for training on all volumes
                     if check_plane_idx in raw_data[1]:
