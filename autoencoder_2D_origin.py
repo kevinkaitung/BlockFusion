@@ -1892,20 +1892,44 @@ class VAE_no_KL(nn.Module):
 
 
     def make_block(self, downsample, in_channels, inter_channels, stride, out_channels, feature_size,
-                   use_transformer=False, use_resblock=True, is_decoder_output=False):
+                   use_transformer=False, use_resblock=True, is_decoder_output=False, num_res_blocks=1):
         layers = []
-        if downsample:
-            conv = GroupConv(in_channels, inter_channels, kernel_size=3, stride=stride, padding=1)
+        
+        #TODO: check whether the num_groups specified here is reasonable or not
+        if in_channels > 64:
+            in_num_groups = 32
+        elif in_channels >= 32:
+            # Note: seems 4 channels in a group is common
+            in_num_groups = in_channels // 4
         else:
-            if stride == 1:
-                conv = GroupConvTranspose(in_channels, inter_channels, kernel_size=3, stride=stride, padding=1, output_padding=0)
-            elif stride == 2:
-                conv = GroupConvTranspose(in_channels, inter_channels, kernel_size=3, stride=stride, padding=1, output_padding=1)
-            else:
-                RuntimeError(f"Unsupported stride {stride} for conv layer")
-        layers.extend([conv, 
-                    #    nn.BatchNorm2d(inter_channels), 
-                       nn.SiLU()])
+            in_num_groups = 1
+        
+        if inter_channels > 64:
+            out_num_groups = 32
+        elif inter_channels >= 32:
+            out_num_groups = inter_channels // 4
+        else:
+            out_num_groups = 1
+        
+        if use_resblock:
+            for i in range(num_res_blocks):
+                resblock = ResBlock_g(in_channels,
+                                    dropout=0,
+                                    out_channels=inter_channels,
+                                    use_conv=True,
+                                    dims=2,
+                                    use_checkpoint=False,
+                                    group_layer_num_in=in_num_groups,
+                                    group_layer_num_out=out_num_groups
+                                    )
+            
+                layers.extend([resblock, 
+                                #    nn.BatchNorm2d(out_channels), 
+                                nn.SiLU()])
+
+                # if the number of res blocks > 1, then use the previous output chs as next input chs
+                in_channels = inter_channels
+                in_num_groups = out_num_groups
         
         if use_transformer:
             dim_head = inter_channels // self.num_heads
@@ -1926,41 +1950,25 @@ class VAE_no_KL(nn.Module):
                             # nn.LayerNorm([inter_channels, feature_size, feature_size * 3]),
                            nn.SiLU()])
         
-        #TODO: check whether the num_groups specified here is reasonable or not
-        if inter_channels > 64:
-            in_num_groups = 32
-        elif inter_channels >= 32:
-            # Note: seems 4 channels in a group is common
-            in_num_groups = inter_channels // 4
+        
+        if downsample:
+            conv = GroupConv(inter_channels, out_channels, kernel_size=3, stride=stride, padding=1)
         else:
-            in_num_groups = 1
-        
-        if out_channels > 64:
-            out_num_groups = 32
-        elif out_channels >= 32:
-            out_num_groups = out_channels // 4
-        else:
-            out_num_groups = 1
-        
-        if use_resblock:
-            resblock = ResBlock_g(inter_channels,
-                                dropout=0,
-                                out_channels=out_channels,
-                                use_conv=True,
-                                dims=2,
-                                use_checkpoint=False,
-                                group_layer_num_in=in_num_groups,
-                                group_layer_num_out=out_num_groups
-                                )
-        
-            if is_decoder_output:
-                layers.extend([resblock, 
-                            #    nn.BatchNorm2d(out_channels), 
-                               nn.Tanh()])
+            if stride == 1:
+                conv = GroupConvTranspose(inter_channels, out_channels, kernel_size=3, stride=stride, padding=1, output_padding=0)
+            elif stride == 2:
+                conv = GroupConvTranspose(inter_channels, out_channels, kernel_size=3, stride=stride, padding=1, output_padding=1)
             else:
-                layers.extend([resblock, 
-                            #    nn.BatchNorm2d(out_channels), 
-                               nn.SiLU()])
+                RuntimeError(f"Unsupported stride {stride} for conv layer")
+        
+        if is_decoder_output:
+            layers.extend([conv, 
+                        #    nn.BatchNorm2d(out_channels), 
+                            nn.Tanh()])
+        else:
+            layers.extend([conv, 
+                        #    nn.BatchNorm2d(out_channels), 
+                            nn.SiLU()])
         
         return nn.Sequential(*layers)
 
