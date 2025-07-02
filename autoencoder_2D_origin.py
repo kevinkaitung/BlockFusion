@@ -1892,7 +1892,7 @@ class VAE_no_KL(nn.Module):
 
 
     def make_block(self, downsample, in_channels, inter_channels, stride, out_channels, feature_size,
-                   use_transformer=False, use_resblock=True, is_decoder_output=False, num_res_blocks=1):
+                   use_transformer=False, use_resblock=True, is_decoder_output=False, num_res_blocks=1, is_batchnorm=False):
         layers = []
         
         #TODO: check whether the num_groups specified here is reasonable or not
@@ -1946,14 +1946,15 @@ class VAE_no_KL(nn.Module):
                                             layer=feature_size
                                             )
             layers.extend([transformer, 
-                        #    nn.BatchNorm2d(inter_channels), 
+                           nn.BatchNorm2d(inter_channels), 
                             # nn.GroupNorm(num_groups, inter_channels),
                             # nn.LayerNorm([inter_channels, feature_size, feature_size * 3]),
-                        #    nn.SiLU()
+                           nn.SiLU()
                            ])
         
-        layers.extend([nn.BatchNorm2d(inter_channels), 
-                        nn.SiLU()])
+        # if is_batchnorm:
+        #     layers.extend([nn.BatchNorm2d(inter_channels), 
+        #                     nn.SiLU()])
         
         if downsample:
             conv = GroupConv(inter_channels, out_channels, kernel_size=3, stride=stride, padding=1)
