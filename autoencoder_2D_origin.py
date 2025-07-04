@@ -1892,7 +1892,7 @@ class VAE_no_KL(nn.Module):
 
 
     def make_block(self, downsample, in_channels, inter_channels, stride, out_channels, feature_size,
-                   use_transformer=False, use_resblock=True, is_decoder_output=False):
+                   use_transformer=False, use_resblock=True, is_decoder_output=False, num_res_blocks=1):
         layers = []
         if downsample:
             conv = GroupConv(in_channels, inter_channels, kernel_size=3, stride=stride, padding=1)
@@ -1943,24 +1943,30 @@ class VAE_no_KL(nn.Module):
             out_num_groups = 1
         
         if use_resblock:
-            resblock = ResBlock_g(inter_channels,
-                                dropout=0,
-                                out_channels=out_channels,
-                                use_conv=True,
-                                dims=2,
-                                use_checkpoint=False,
-                                group_layer_num_in=in_num_groups,
-                                group_layer_num_out=out_num_groups
-                                )
+            for i in range(num_res_blocks):
+                resblock = ResBlock_g(inter_channels,
+                                    dropout=0,
+                                    out_channels=out_channels,
+                                    use_conv=True,
+                                    dims=2,
+                                    use_checkpoint=False,
+                                    group_layer_num_in=in_num_groups,
+                                    group_layer_num_out=out_num_groups
+                                    )
+        
+                layers.extend([resblock])
+                
+                inter_channels = out_channels
+                in_num_groups = out_num_groups
         
             if is_decoder_output:
-                layers.extend([resblock, 
+                layers.extend([ 
                             #    nn.BatchNorm2d(out_channels), 
-                               nn.Tanh()])
+                                nn.Tanh()])
             else:
-                layers.extend([resblock, 
+                layers.extend([ 
                             #    nn.BatchNorm2d(out_channels), 
-                               nn.SiLU()])
+                                nn.SiLU()])
         
         return nn.Sequential(*layers)
 
