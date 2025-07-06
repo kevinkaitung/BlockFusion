@@ -1307,10 +1307,7 @@ class SpatialTransformer_(nn.Module):
 class GroupConv(nn.Module):
     def __init__(self, in_channels,out_channels, kernel_size, stride=1,padding=0) -> None:
         super(GroupConv, self).__init__()
-        if single_triplane:
-            self.num_triplane = 1
-        else:
-            self.num_triplane = 3
+        self.num_triplane = global_num_triplane
         self.conv = nn.Conv2d(self.num_triplane*in_channels, self.num_triplane*out_channels, kernel_size, stride, padding,groups=self.num_triplane)
     def forward(self, data: Tensor, **kwargs) -> Tensor:
         data = torch.concat(torch.chunk(data,self.num_triplane,dim=-1),dim=1)
@@ -1321,10 +1318,7 @@ class GroupConv(nn.Module):
 class GroupConvTranspose(nn.Module):
     def __init__(self, in_channels,out_channels, kernel_size, stride=1,padding=0,output_padding=0) -> None:
         super(GroupConvTranspose, self).__init__()
-        if single_triplane:
-            self.num_triplane = 1
-        else:
-            self.num_triplane = 3
+        self.num_triplane = global_num_triplane
         self.conv = nn.ConvTranspose2d(self.num_triplane*in_channels, self.num_triplane*out_channels, kernel_size, stride, padding,output_padding,groups=self.num_triplane)
     def forward(self, data: Tensor, **kwargs) -> Tensor:
         data = torch.concat(torch.chunk(data,self.num_triplane,dim=-1),dim=1)
@@ -1803,7 +1797,7 @@ class VAE(nn.Module):
 
 class VAE_no_KL(nn.Module):
     def __init__(self, vae_config, encoder_dims, feature_size_encoder, decoder_dims, feature_size_decoder, fpn_encoders_layer_dim_idx,
-                 fpn_decoders_layer_dim_idx, fpn_encoders_down_idx, fpn_encoders_up_idx, fpn_decoders_down_idx, fpn_decoders_up_idx, block_config, is_single_triplane=False) -> None:
+                 fpn_decoders_layer_dim_idx, fpn_encoders_down_idx, fpn_encoders_up_idx, fpn_decoders_down_idx, fpn_decoders_up_idx, block_config, num_triplane=3) -> None:
         super(VAE_no_KL, self).__init__()
 
         kl_std = vae_config.get("kl_std", 0.25)
@@ -1815,12 +1809,9 @@ class VAE_no_KL(nn.Module):
         transform_depth = vae_config.get("transform_depth", 1)
 
         # not a good practice but temporary solution to test single triplane
-        global single_triplane
-        single_triplane = is_single_triplane
-        if single_triplane:
-            self.num_triplane = 1
-        else:
-            self.num_triplane = 3
+        global global_num_triplane
+        global_num_triplane = num_triplane
+        self.num_triplane = global_num_triplane
 
 
         self.plane_dim = len(plane_shape) + 1

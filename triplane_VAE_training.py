@@ -68,7 +68,7 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100, ten
                     channel = 16
                     # for training on all volumes
                     if check_plane_idx in raw_data[1]:
-                        for plane in range (3):
+                        for plane in range (num_triplane):
                             plot_single_channel(output[0][torch.where(raw_data[1] == check_plane_idx)[0].item()][plane][channel].detach(), f"epoch{epoch}_plane{plane}", save_path=os.path.join(run_dir, f"epoch{epoch}_plane{plane}.png"))
                     # for only one volume
                     # for plane in range (3):
@@ -146,10 +146,12 @@ if __name__ == "__main__":
     
     cfg = importlib.import_module(f"autoencoder_config.triplane.{args.model_config}")
     
+    # test training 4 triplanes in VAE
+    global num_triplane = 4
     vae_model = torch.nn.DataParallel(VAE_no_KL(cfg.vae_config, cfg.encoder_dims, cfg.feature_size_encoder, cfg.decoder_dims,
                                                 cfg.feature_size_decoder, cfg.fpn_encoders_layer_dim_idx, cfg.fpn_decoders_layer_dim_idx,
                                                 cfg.fpn_encoders_down_idx, cfg.fpn_encoders_up_idx, cfg.fpn_decoders_down_idx,
-                                                cfg.fpn_decoders_up_idx, cfg.block_config)).cuda()
+                                                cfg.fpn_decoders_up_idx, cfg.block_config, num_triplane)).cuda()
     
     n_timesteps = 90
     # batch_size = 1
@@ -186,8 +188,12 @@ if __name__ == "__main__":
     logging.getLogger('matplotlib').setLevel(logging.WARNING)
 
     # load pretrained tri-plane here
-    loaded_model = torch.load("fit_triplane/ch_32_saved_model.ckpt")
-    triplane_weights = [loaded_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_timesteps)]
+    loaded_model = torch.load("fit_triplane/ch_32_4_planes_saved_model.ckpt")
+    triplane_weights = []
+    for idx in range(n_timesteps):
+        tmp_1, tmp_2 = torch.chunk(loaded_model['triplane_state_dict'][f"{idx}.triplane_1"], 2, dim=2)
+        triplane_weights.append(torch.cat((tmp_1, tmp_2, loaded_model['triplane_state_dict'][f"{idx}.triplane_23"]),dim=1))
+        
     triplane_weights = torch.cat(triplane_weights, dim=0)
     
     # normalize triplane value to -1, 1
@@ -214,8 +220,8 @@ if __name__ == "__main__":
     print("loss: {}".format(loss))
     print("z shape: {}".format(out[-1].shape))
     print("reconstruct shape: {}".format(out[0].shape))
-    samples = vae_model.module.sample(2)
-    print("samples shape: {}".format(samples[0].shape))
+    # samples = vae_model.module.sample(2)
+    # print("samples shape: {}".format(samples[0].shape))
     
     model_arch_str = str(vae_model)
     
