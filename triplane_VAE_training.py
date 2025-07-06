@@ -147,7 +147,8 @@ if __name__ == "__main__":
     cfg = importlib.import_module(f"autoencoder_config.triplane.{args.model_config}")
     
     # test training 4 triplanes in VAE
-    global num_triplane = 4
+    global num_triplane
+    num_triplane = 4
     vae_model = torch.nn.DataParallel(VAE_no_KL(cfg.vae_config, cfg.encoder_dims, cfg.feature_size_encoder, cfg.decoder_dims,
                                                 cfg.feature_size_decoder, cfg.fpn_encoders_layer_dim_idx, cfg.fpn_decoders_layer_dim_idx,
                                                 cfg.fpn_encoders_down_idx, cfg.fpn_encoders_up_idx, cfg.fpn_decoders_down_idx,
