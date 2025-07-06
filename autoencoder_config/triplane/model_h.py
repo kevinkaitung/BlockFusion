@@ -5,7 +5,8 @@
 vae_config = {
             "kl_std": 0.25,
             # "kl_weight": 0.0001,
-            "kl_weight": 0.000001, # manually increasing KL-weights if performing KL_annealing
+            # try to remove kl regularization since kl reg would cause NaN at some points during training
+            "kl_weight": 0.0, # manually increasing KL-weights if performing KL_annealing
             # 3 planes (xy, yz, xz) * 32 channels (feature vectors) * 128x128
             "plane_shape": [4, 32, 128, 128],
             "z_shape": [4, 32, 32],
