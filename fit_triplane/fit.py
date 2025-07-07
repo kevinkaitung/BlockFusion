@@ -359,9 +359,19 @@ if __name__ == "__main__":
 
         update_lr(optimizer, epoch, config)
 
+    for param_group in optimizer.param_groups:
+        if "net" in param_group['name']:
+            final_lr_net = param_group['lr']
+        if "tri" in param_group['name']:
+            final_lr_tri = param_group['lr']
+
     torch.save({
                     'net_state_dict': net.state_dict(),
                     'triplane_state_dict': triplane.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'lr_net': final_lr_net,
+                    'lr_tri': final_lr_tri,
+                    'epoch': epoch,
                 }, "new_saved_model.ckpt")
 
     # vis_model(net, triplane, config.n_labels, '.')

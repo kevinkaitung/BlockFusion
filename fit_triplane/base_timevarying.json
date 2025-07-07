@@ -1,7 +1,7 @@
 {
     "pcd_num": 300000,
     "sdf_num": 100000,
-    "max_iters": 10000,
+    "max_iters": 15000,
     "lr_net": 1e-3,
     "lr_tri": 1e-3,
     "batch_size": 90,
