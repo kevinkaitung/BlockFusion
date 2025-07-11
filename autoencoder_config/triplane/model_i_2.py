@@ -27,7 +27,7 @@ encoders_down_end_idx = 4
 encoders_up_end_idx = 6
 
 # decoder_in_channels = 128
-decoder_dims =         [512,  1024, 2048, 1024, 768, 512, vae_config["plane_shape"][1]]
+decoder_dims =         [512,  1024, 2048, 1024, 512, 512, vae_config["plane_shape"][1]]
 feature_size_decoder = [ 32,   16,     8,   16,  32,  64, vae_config["plane_shape"][2]]
 decoder_use_transformers = [None, True, True, True, True, True, False]
 decoder_use_resblocks = [None, False, False, False, False, False, True]
@@ -37,12 +37,12 @@ decoders_down_end_idx = 2
 decoders_up_end_idx = 6
 
 # these indices index for encoder_dims/decoder_dims
-fpn_encoders_layer_dim_idx = [1, 2, 3]
+fpn_encoders_layer_dim_idx = [2, 3]
 fpn_decoders_layer_dim_idx = [0, 1, 2]
 
 # these indices index for the group of blocks (i.e., encoders_down, ...) in block_config
-fpn_encoders_down_idx = [0, 1, 2]
-fpn_encoders_up_idx = [1, 2]
+fpn_encoders_down_idx = [1, 2]
+fpn_encoders_up_idx = [1]
 fpn_decoders_down_idx = [-1, 0, 1]
 fpn_decoders_up_idx = [1, 2]
 
