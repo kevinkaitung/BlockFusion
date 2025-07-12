@@ -11,9 +11,10 @@ import importlib
 from autoencoder_2D_origin import VAE_no_KL
 from timevarying_data_helper import LatentWeightDataset
 from fit_triplane.visualize_triplane import plot_single_channel
+from torchmetrics.image import MultiScaleStructuralSimilarityIndexMeasure
 
 check_plane_idx = 50
-vis_triplane_freq = 100
+vis_triplane_freq = 50
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a autoencoder on triplanes")
@@ -42,12 +43,20 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100, ten
     min, max = train_dataloader.dataset.get_value_range()
     value_range = max - min
     
+    # TODO: check whether the param is appropriate (i.e., betas)
+    ms_ssim = MultiScaleStructuralSimilarityIndexMeasure(kernel_size = 11, betas = (0.8,0.6),data_range=value_range).cuda()
+    lambda_mse_loss = 1.0
+    lambda_mae_loss = 1.0
+    lambda_msssim_loss = 0.1
+    lambda_lpips_loss = 1.0
+    
     for epoch in range(epochs):
         epoch = epoch + resume_epoch
         
         running_mse_loss = 0.0
         running_recon_loss = 0.0
         running_kl_loss = 0.0
+        running_ms_ssim_loss = 0.0
         running_loss = 0.0
         total_elems = 0
         
@@ -77,9 +86,10 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100, ten
                 # reconstructed results is the first element of the output (output[0])
                 with torch.no_grad():
                     mse_loss_val = F.mse_loss(output[0], raw_data[0]).item()
-                recon_loss = F.l1_loss(output[0], raw_data[0])
+                recon_loss = lambda_mae_loss * F.l1_loss(output[0], raw_data[0])
                 kl_loss = vae_model.module.loss_function(*output)
-                loss = recon_loss + kl_loss
+                ms_ssim_loss = lambda_msssim_loss * (1 - ms_ssim(output[0], raw_data[0]))
+                loss = recon_loss + kl_loss + ms_ssim_loss
                 # loss = recon_loss
             scalar.scale(loss).backward()
             scalar.step(optimizer)
@@ -91,16 +101,17 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100, ten
             running_mse_loss += mse_loss_val * raw_data[0].shape[0]
             running_recon_loss += recon_loss.item() * raw_data[0].shape[0]
             running_kl_loss += kl_loss.item() * raw_data[0].shape[0]
-            running_loss += running_recon_loss + running_kl_loss
+            running_ms_ssim_loss += ms_ssim_loss.item() * raw_data[0].shape[0]
+            running_loss += running_recon_loss + running_kl_loss + running_ms_ssim_loss
             total_elems += raw_data[0].shape[0]
             
             # TODO: need to sperate PSNR evaluation from each volume (cause currently has four volumes in one batch)
             # console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
             if console_logger is not None:
-                console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(mse_loss_val))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
+                console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, MS-SSIM loss: {ms_ssim_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(mse_loss_val))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
                 # console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
             else:
-                print(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(mse_loss_val))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
+                print(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, MS-SSIM loss: {ms_ssim_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(mse_loss_val))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
                 # print(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
             # import pdb; pdb.set_trace()
         
@@ -109,11 +120,13 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100, ten
         last_mse_loss = running_mse_loss / total_elems
         last_recon_loss = running_recon_loss / total_elems
         last_kl_loss = running_kl_loss / total_elems
+        last_ms_ssim_loss = running_ms_ssim_loss / total_elems
         last_loss = running_loss / total_elems
         last_PSNR = 20 * np.log10(value_range / np.sqrt(last_mse_loss))
         if tensorboard_writer is not None:
             tensorboard_writer.add_scalar("Loss/Train_Recon", last_recon_loss, epoch)
             tensorboard_writer.add_scalar("Loss/Train_KL", last_kl_loss, epoch)
+            tensorboard_writer.add_scalar("Loss/Train_MS_SSIM", last_ms_ssim_loss, epoch)
             tensorboard_writer.add_scalar("Loss/Train", last_loss, epoch)
             tensorboard_writer.add_scalar("Loss/Train_PSNR", last_PSNR, epoch)
             tensorboard_writer.add_scalar("Learning Rate", scheduler.get_last_lr()[0], epoch)
