@@ -151,7 +151,10 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
             tensorboard_writer.add_scalar("Learning Rate", scheduler.get_last_lr()[0], epoch)
         
         # adjust learning rate
-        scheduler.step(last_loss)
+        if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            scheduler.step(last_loss)
+        else:
+            scheduler.step()  # StepLR, MultiStepLR, CosineAnnealingLR, etc.
         
         # save the model at checkpoint
         if (epoch % ckpt_freq == (ckpt_freq - 1)) or (epoch == (epochs + resume_epoch) - 1):
@@ -296,7 +299,10 @@ if __name__ == "__main__":
     
         console_logger.debug("Experiment description: " + args.description)
         console_logger.debug(f"Batch Size: {args.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
-        console_logger.debug(f"Initial Learning rate: {args.init_lr}, Patience Epochs: {args.patience}, Milestones: {args.milestones}, Learning rate Decay Factor: {args.lr_gamma}")
+        if args.milestones:
+            console_logger.debug(f"Initial Learning rate: {args.init_lr}, Milestones: {args.milestones}, Learning rate Decay Factor: {args.lr_gamma}")
+        else:
+            console_logger.debug(f"Initial Learning rate: {args.init_lr}, Patience Epochs: {args.patience}, Learning rate Decay Factor: {args.lr_gamma}")
         console_logger.debug(f"Model config: autoencoder_config.triplane.{args.model_config}")
         console_logger.debug(f"MAE Loss Weight: {args.mae_loss_weight}, MSE Loss Weight: {args.mse_loss_weight}, MS SSIM Loss Weight: {args.ms_ssim_loss_weight}")
         console_logger.debug(f"LPIPS Loss Weight: {args.lpips_loss_weight}, KL Loss Weight Values:{args.kl_loss_weight_values}, KL Loss Weight Epochs:{args.kl_loss_weight_epochs}")
