@@ -26,7 +26,8 @@ def parse_args():
     parser.add_argument("--init_lr", type=float, default=1e-3, help="Initial learning rate for training")
     # parser.add_argument("--lr_decay", type=int, default=3000, help="Learning rate decay frequency")
     parser.add_argument("--lr_gamma", type=float, default=0.2, help="Learning rate decay factor")
-    parser.add_argument("--patience", type=int, default=150, help="Number of patience epochs to decay learning rate")
+    parser.add_argument("--patience", type=int, default=150, help="Number of patience epochs to decay learning rate (For ReduceLROnPlateau)")
+    parser.add_argument("--milestones", type=int, nargs='*', default=None, help="List of epoch indices to decay learning rate (For MultiStepLR)")
     parser.add_argument("--resume_training_dir", type=str, default=None, help="Directory to resume training from")
     parser.add_argument("--resume_model_file_name", type=str, default=None, help="Model file name to resume training from")
     parser.add_argument("--model_config", type=str, default="model_a", help="Model config file name")
@@ -35,13 +36,14 @@ def parse_args():
     parser.add_argument("--mse_loss_weight", type=float, default=None, help="Weights of mse_loss") # default = 1.0
     parser.add_argument("--ms_ssim_loss_weight", type=float, default=None, help="Weights of ms_ssim_loss") # default = 0.1
     parser.add_argument("--lpips_loss_weight", type=float, default=None, help="Weights of lpips_loss") # default = 1.0
-    parser.add_argument("--kl_loss_weight", type=float, default=None, help="Weights of kl_loss") # default = 0.00001
+    parser.add_argument("--kl_loss_weight_values", type=float, nargs='*', default=None, help="Weight values of kl_loss") # default = [0.00001]
+    parser.add_argument("--kl_loss_weight_epochs", type=int, nargs='*', default=None, help="Epochs to change weights of kl_loss") # default = [0]
     return parser.parse_args()
 
 # redefinition of traning pipeline for multiple input volumes
 def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100, 
               tensorboard_writer=None, console_logger=None, run_dir=None, ckpt_freq=100, resume_epoch=0,
-              mae_loss_weight=1.0, mse_loss_weight=1.0, ms_ssim_loss_weight=0.1, lpips_loss_weight=1.0, kl_loss_weight=0.00001):
+              mae_loss_weight=1.0, mse_loss_weight=1.0, ms_ssim_loss_weight=0.1, lpips_loss_weight=1.0, kl_loss_weight_values=[0.00001], kl_loss_weight_epochs=[0]):
 
     vae_model.train()
     
@@ -50,6 +52,10 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
     scalar = torch.amp.GradScaler("cuda", enabled=False)
     min, max = train_dataloader.dataset.get_value_range()
     value_range = max - min
+    
+    current_kl_loss_weight_epochs_idx = 0
+    kl_loss_weight = kl_loss_weight_values[current_kl_loss_weight_epochs_idx]
+    current_kl_loss_weight_epochs_idx += 1
     
     # TODO: check whether the param is appropriate (i.e., betas)
     ms_ssim = MultiScaleStructuralSimilarityIndexMeasure(kernel_size = 11, betas = (0.8,0.6),data_range=value_range).cuda()
@@ -63,6 +69,13 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
         running_ms_ssim_loss = 0.0
         running_loss = 0.0
         total_elems = 0
+        
+        # fetch the correct kl_loss first
+        # check to avoid index error
+        if current_kl_loss_weight_epochs_idx < len(kl_loss_weight_epochs): 
+            if epoch == kl_loss_weight_epochs[current_kl_loss_weight_epochs_idx]:
+                kl_loss_weight = kl_loss_weight_values[current_kl_loss_weight_epochs_idx]
+                current_kl_loss_weight_epochs_idx += 1
         
         # mini-batch or SGD (with small batch as one sample) training
         # since we do optimization after each batch
@@ -239,10 +252,14 @@ if __name__ == "__main__":
     model_arch_str = str(vae_model)
     
     optimizer = torch.optim.Adam(vae_model.parameters(), lr=args.init_lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode='min', factor=args.lr_gamma, patience=args.patience)
+    if args.milestones:
+        # TODO: currently haven't implemented MultiStepLR for resuming training
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer=optimizer, milestones=args.milestones, gamma=args.lr_gamma)
+    else:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode='min', factor=args.lr_gamma, patience=args.patience)
     
     # Check whether loss weights have been set from command line arguments
-    if (not args.mae_loss_weight) or (not args.mse_loss_weight) or (not args.ms_ssim_loss_weight) or (not args.lpips_loss_weight) or (not args.kl_loss_weight):
+    if (not args.mae_loss_weight) or (not args.mse_loss_weight) or (not args.ms_ssim_loss_weight) or (not args.lpips_loss_weight) or (not args.kl_loss_weight_values) or (not args.kl_loss_weight_epochs):
         raise RuntimeError("Missing one of the loss weights, please set all of them every time (both training from scratch and resume training)")
     
     # resume training
@@ -270,7 +287,7 @@ if __name__ == "__main__":
         del loaded_ckpt
         torch.cuda.empty_cache()
         console_logger.debug(f"MAE Loss Weight: {args.mae_loss_weight}, MSE Loss Weight: {args.mse_loss_weight}, MS SSIM Loss Weight: {args.ms_ssim_loss_weight}")
-        console_logger.debug(f"LPIPS Loss Weight: {args.lpips_loss_weight}, KL Loss Weight:{args.kl_loss_weight}")
+        console_logger.debug(f"LPIPS Loss Weight: {args.lpips_loss_weight}, KL Loss Weight Values:{args.kl_loss_weight_values}, KL Loss Weight Epochs:{args.kl_loss_weight_epochs}")
         
     # training from scratch
     else:
@@ -279,11 +296,11 @@ if __name__ == "__main__":
     
         console_logger.debug("Experiment description: " + args.description)
         console_logger.debug(f"Batch Size: {args.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
-        console_logger.debug(f"Initial Learning rate: {args.init_lr}, Patience Epochs: {args.patience}, Learning rate Decay Factor: {args.lr_gamma}")
+        console_logger.debug(f"Initial Learning rate: {args.init_lr}, Patience Epochs: {args.patience}, Milestones: {args.milestones}, Learning rate Decay Factor: {args.lr_gamma}")
         console_logger.debug(f"Model config: autoencoder_config.triplane.{args.model_config}")
         console_logger.debug(f"MAE Loss Weight: {args.mae_loss_weight}, MSE Loss Weight: {args.mse_loss_weight}, MS SSIM Loss Weight: {args.ms_ssim_loss_weight}")
-        console_logger.debug(f"LPIPS Loss Weight: {args.lpips_loss_weight}, KL Loss Weight:{args.kl_loss_weight}")
+        console_logger.debug(f"LPIPS Loss Weight: {args.lpips_loss_weight}, KL Loss Weight Values:{args.kl_loss_weight_values}, KL Loss Weight Epochs:{args.kl_loss_weight_epochs}")
     
     
     train_vae(vae_model, train_dataloader, optimizer, scheduler, args.epochs, tensorboard_writer, console_logger, run_dir, args.ckpt_freq, resume_epoch,
-              args.mae_loss_weight, args.mse_loss_weight, args.ms_ssim_loss_weight, args.lpips_loss_weight, args.kl_loss_weight)
+              args.mae_loss_weight, args.mse_loss_weight, args.ms_ssim_loss_weight, args.lpips_loss_weight, args.kl_loss_weight_values, args.kl_loss_weight_epochs)
