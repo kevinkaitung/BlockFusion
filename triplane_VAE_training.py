@@ -65,6 +65,7 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
         
         running_mae_loss = 0.0
         running_mse_loss = 0.0
+        running_mse_loss_val = 0.0
         running_kl_loss = 0.0
         running_ms_ssim_loss = 0.0
         running_loss = 0.0
@@ -118,6 +119,7 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
             
             running_mae_loss += mae_loss.item() * raw_data[0].shape[0]
             running_mse_loss += mse_loss.item() * raw_data[0].shape[0]
+            running_mse_loss_val += mse_loss_val * raw_data[0].shape[0]
             running_kl_loss += kl_loss.item() * raw_data[0].shape[0]
             running_ms_ssim_loss += ms_ssim_loss.item() * raw_data[0].shape[0]
             running_loss += running_mae_loss + running_mse_loss + running_kl_loss + running_ms_ssim_loss
@@ -137,10 +139,11 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
         assert total_elems == len(train_dataloader.dataset), "total_elems should be equal to the dataset size"
         last_mae_loss = running_mae_loss / total_elems
         last_mse_loss = running_mse_loss / total_elems
+        last_mse_loss_val = running_mse_loss_val / total_elems
         last_kl_loss = running_kl_loss / total_elems
         last_ms_ssim_loss = running_ms_ssim_loss / total_elems
         last_loss = running_loss / total_elems
-        last_PSNR = 20 * np.log10(value_range / np.sqrt(last_mse_loss / mse_loss_weight))
+        last_PSNR = 20 * np.log10(value_range / np.sqrt(last_mse_loss_val))
         if tensorboard_writer is not None:
             tensorboard_writer.add_scalar("Loss/Train_MAE", last_mae_loss, epoch)
             tensorboard_writer.add_scalar("Loss/Train_MSE", last_mse_loss, epoch)
@@ -262,7 +265,7 @@ if __name__ == "__main__":
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode='min', factor=args.lr_gamma, patience=args.patience)
     
     # Check whether loss weights have been set from command line arguments
-    if (not args.mae_loss_weight) or (not args.mse_loss_weight) or (not args.ms_ssim_loss_weight) or (not args.lpips_loss_weight) or (not args.kl_loss_weight_values) or (not args.kl_loss_weight_epochs):
+    if (args.mae_loss_weight == None) or (args.mse_loss_weight == None) or (args.ms_ssim_loss_weight == None) or (args.lpips_loss_weight == None) or (args.kl_loss_weight_values == None) or (args.kl_loss_weight_epochs == None):
         raise RuntimeError("Missing one of the loss weights, please set all of them every time (both training from scratch and resume training)")
     
     # resume training
