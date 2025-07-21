@@ -60,7 +60,7 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
     
     # TODO: check whether the param is appropriate (i.e., betas)
     ms_ssim = MultiScaleStructuralSimilarityIndexMeasure(kernel_size = 11, betas = (0.8,0.6),data_range=value_range).cuda()
-    lpips = LearnedPerceptualImagePatchSimilarity(net_type='squeeze').cuda()
+    # lpips = LearnedPerceptualImagePatchSimilarity(net_type='squeeze').cuda()
     
     for epoch in range(epochs):
         epoch = epoch + resume_epoch
@@ -112,7 +112,8 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
                 kl_loss = kl_loss_weight * vae_model.module.loss_function(*output)
                 ms_ssim_loss = ms_ssim_loss_weight * (1 - ms_ssim(output[0], raw_data[0]))
                 # lpips_loss = lpips_loss_weight * lpips(output[0].reshape([-1, 1, output[0].shape[3], output[0].shape[4]]).repeat(1, 3, 1, 1), raw_data[0].reshape([-1, 1, raw_data[0].shape[3], raw_data[0].shape[4]]).repeat(1, 3, 1, 1))
-                lpips_loss = lpips_loss_weight * lpips(output[0].reshape([-1, 1, output[0].shape[3], output[0].shape[4]]).expand(-1, 3, -1, -1), raw_data[0].reshape([-1, 1, raw_data[0].shape[3], raw_data[0].shape[4]]).expand(-1, 3, -1, -1))
+                # lpips_loss = lpips_loss_weight * lpips(output[0].reshape([-1, 1, output[0].shape[3], output[0].shape[4]]).expand(-1, 3, -1, -1), raw_data[0].reshape([-1, 1, raw_data[0].shape[3], raw_data[0].shape[4]]).expand(-1, 3, -1, -1))
+                lpips_loss = torch.tensor(0).cuda()
                 loss = mae_loss + mse_loss + kl_loss + ms_ssim_loss + lpips_loss
                 # loss = recon_loss
             scalar.scale(loss).backward()
