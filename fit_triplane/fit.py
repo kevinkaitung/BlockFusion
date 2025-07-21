@@ -1,6 +1,8 @@
 from tqdm import tqdm
 from easydict import EasyDict as edict
 import argparse
+import logging
+from datetime import datetime
 from torch import nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset
@@ -258,8 +260,33 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='base_timevarying.json')
+    parser.add_argument("--expname", type=str, default="finetune_VAE_recon_triplanes", help="Experiment name")
+    parser.add_argument('--resume_training_model', type=str, default=None)
     args = parser.parse_args()
 
+    # create directory for saving logs
+    base_dir = "../logs"
+    os.makedirs(base_dir, exist_ok=True)
+    expname_dir = os.path.join(base_dir, args.expname)
+    os.makedirs(expname_dir, exist_ok=True)
+    run_dir = os.path.join(expname_dir, datetime.now().strftime("%Y%m%d-%H%M%S"))
+    os.makedirs(run_dir, exist_ok=True)
+    logging_file_md = 'w'
+    
+    # create tensorboard logger
+    from torch.utils.tensorboard import SummaryWriter
+    tensorboard_writer = SummaryWriter(log_dir=run_dir)
+    
+    # prepare python logger
+    logging.basicConfig(filename=os.path.join(run_dir, "console_log.log"),
+                    format='%(asctime)s %(message)s',
+                    filemode=logging_file_md)
+    console_logger = logging.getLogger()
+    console_logger.setLevel(logging.DEBUG)
+
+    # to suppress matplotlib logging
+    logging.getLogger('matplotlib').setLevel(logging.WARNING)
+    
     with open(args.config, 'r') as f:
         config = json.load(f)
     config = edict(config)
@@ -284,13 +311,21 @@ if __name__ == "__main__":
     ).cuda() for _ in range(n_timesteps)]
     triplane = nn.ModuleList(triplane)
 
-    optimizer = create_optimizer(net, triplane, config)
+    # for fine tune model (TODO: might also think about how to incorporate non-finetune resume training)
+    if args.resume_training_model:
+        loaded_model = torch.load(args.resume_training_model)
+        net.load_state_dict(loaded_model['net_state_dict'])
+        triplane.load_state_dict(loaded_model['triplane_state_dict'])
+        # TODO: make sure whether I should use optimizer from pretrained triplane?
+        optimizer = create_optimizer(net, None, config)
+    else:
+        optimizer = create_optimizer(net, triplane, config)
 
     # prepare dataset
     # TODO: tweak to let dataloader return both raw data and timesteps
     train_dataloader = torch.utils.data.DataLoader(
         SampleTimevaryingDataset(
-            raw_data_prefix="/media/data/qadwu/volume/vortices",
+            raw_data_prefix="/home/kctung/vortices",
             raw_data_filename_without_timestep="vorts",
             file_ext="data",
             res=[128, 128, 128],
@@ -303,7 +338,12 @@ if __name__ == "__main__":
     # TODO: value range should be retrieve from SampleTimevaryingDataset class (which is more reasonable)
     value_range = 1.0
 
-    for epoch in tqdm(range(1, config.max_iters + 1)):
+    if "resume_iter" in config:
+        start_iter = config.resume_iter
+    else:
+        start_iter = 0
+
+    for epoch in tqdm(range(start_iter+1, config.max_iters + 1)):
         
         running_loss = torch.tensor(0.0).cuda()
         
@@ -355,8 +395,11 @@ if __name__ == "__main__":
             
         avg_loss = running_loss / len(train_dataloader)
         loss_list.append(avg_loss)
-        print(f"Epoch {epoch}, Loss: {avg_loss}, , Reconstruction PSNR: {(20 * torch.log10(value_range / torch.sqrt(avg_loss))):0,.4f}")
-
+        PSNR_value = (20 * torch.log10(value_range / torch.sqrt(avg_loss))).item()
+        console_logger.debug(f"Epoch {epoch}, Loss: {avg_loss.item()}, , Reconstruction PSNR: {(PSNR_value):0,.4f}")
+        print(f"Epoch {epoch}, Loss: {avg_loss.item()}, , Reconstruction PSNR: {(PSNR_value):0,.4f}")
+        tensorboard_writer.add_scalar("Loss/Train", avg_loss.item(), epoch)
+        tensorboard_writer.add_scalar("Loss/Train_PSNR", PSNR_value, epoch)
         update_lr(optimizer, epoch, config)
 
     for param_group in optimizer.param_groups:
@@ -364,6 +407,8 @@ if __name__ == "__main__":
             final_lr_net = param_group['lr']
         if "tri" in param_group['name']:
             final_lr_tri = param_group['lr']
+        else:
+            final_lr_tri = None
 
     torch.save({
                     'net_state_dict': net.state_dict(),
@@ -372,7 +417,7 @@ if __name__ == "__main__":
                     'lr_net': final_lr_net,
                     'lr_tri': final_lr_tri,
                     'epoch': epoch,
-                }, "new_saved_model.ckpt")
+                }, os.path.join(run_dir, f"triplane_model_{epoch}.ckpt"))
 
     # vis_model(net, triplane, config.n_labels, '.')
     # save_model(net, triplane, '.')
