@@ -12,13 +12,16 @@ import torch
 import numpy as np
 import os, sys
 import json
-from visualize_triplane import plot_single_channel
 
 # Add parent directory to sys.path
 # TODO: make it more flexible to call timevarying_data_helper anywhere
+current_dir = os.path.abspath(os.path.dirname(__file__))
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
+from visualize_triplane import plot_single_channel
 from timevarying_data_helper import SampleTimevaryingDataset
 
 def vis_model(net, triplane, n_labels, savedir, oid=0, rank=0):
