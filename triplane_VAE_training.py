@@ -21,6 +21,7 @@ from timevarying_data_helper import SampleTimevaryingDataset
 
 check_plane_idx = 50
 vis_triplane_freq = 50
+regenerate_sampled_points_freq = 10
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a autoencoder on triplanes")
@@ -37,6 +38,7 @@ def parse_args():
     parser.add_argument("--resume_training_dir", type=str, default=None, help="Directory to resume training from")
     parser.add_argument("--resume_model_file_name", type=str, default=None, help="Model file name to resume training from")
     parser.add_argument("--model_config", type=str, default="model_a", help="Model config file name")
+    parser.add_argument("--scheduler_type", type=str, default=None, help="Scheduler types: MultiStepLR or ReduceLROnPlateau")
     
     parser.add_argument("--mae_loss_weight", type=float, default=None, help="Weights of mae_loss") # default = 1.0
     parser.add_argument("--mse_loss_weight", type=float, default=None, help="Weights of mse_loss") # default = 1.0
@@ -50,18 +52,18 @@ def parse_args():
 def regenerate_sampled_points(dataset_for_sampling):
     # TODO: think about should I use different set of coordinates for different timestep volumes
     # currently only use one set of coords for all timesteps volumes
-    sample_coords = torch.rand([dataset_for_sampling.sample_batch_size, 3], dtype=torch.float32).cuda()
-    target_values = [dataset_for_sampling.sample(i, sample_coords) for i in range(len(dataset_for_sampling))]
+    sample_coords = [torch.rand([dataset_for_sampling.sample_batch_size, 3], dtype=torch.float32).cuda() for i in range(len(dataset_for_sampling))]
+    target_values = [dataset_for_sampling.sample(i, sample_coords[i]) for i in range(len(dataset_for_sampling))]
     
     return sample_coords, target_values
 
 def calculate_geometry_loss(net, triplane, timestep_indices, sample_coords, target_values, debug=False):
     losses = []
     for i in range(len(timestep_indices)):
-        outputs = net(triplane[i](sample_coords, 0))
+        outputs = net(triplane[i](sample_coords[timestep_indices[i]], 0))
         losses.append(F.l1_loss(outputs, target_values[timestep_indices[i]].view(outputs.shape)))
     if debug:
-        torch.save({"sample_coords":sample_coords,
+        torch.save({"sample_coords":sample_coords[timestep_indices[i]],
                     "timestep_indices":timestep_indices[i],
                     "target_values":target_values[timestep_indices[i]],
                     "outputs":outputs,
@@ -126,7 +128,7 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
     # lpips = LearnedPerceptualImagePatchSimilarity(net_type='squeeze').cuda()
     
     for epoch in range(epochs):
-        if epoch % 10 == 0:
+        if epoch % regenerate_sampled_points_freq == 0:
             # generate sampled coords and their corresponding target values
             sample_coords, target_values = regenerate_sampled_points(dataset_for_sampling)
         
@@ -184,10 +186,11 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
                 lpips_loss = torch.tensor(0).cuda()
                 # load VAE-reconstructed triplanes into triplane models
                 load_params_to_triplane(triplane, output[0], original_triplane_min, original_triplane_max, min, max)
-                if (epoch % ckpt_freq == (ckpt_freq - 1)) or (epoch == (epochs + resume_epoch) - 1):
-                    debug = True
-                else:
-                    debug = False
+                # if (epoch % ckpt_freq == (ckpt_freq - 1)) or (epoch == (epochs + resume_epoch) - 1):
+                #     debug = True
+                # else:
+                #     debug = False
+                debug = False
                 geometry_loss = geometry_loss_weight * calculate_geometry_loss(net, triplane, raw_data[1], sample_coords, target_values, debug)
                 loss = mae_loss + mse_loss + kl_loss + ms_ssim_loss + lpips_loss + geometry_loss
                 # loss = recon_loss
@@ -366,11 +369,12 @@ if __name__ == "__main__":
     model_arch_str = str(vae_model)
     
     optimizer = torch.optim.Adam(vae_model.parameters(), lr=args.init_lr)
-    if args.milestones:
-        # TODO: currently haven't implemented MultiStepLR for resuming training
+    if args.scheduler_type == "MultiStepLR":
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer=optimizer, milestones=args.milestones, gamma=args.lr_gamma)
-    else:
+    elif args.scheduler_type == "ReduceLROnPlateau":
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode='min', factor=args.lr_gamma, patience=args.patience)
+    else:
+        raise RuntimeError("Didn't specify the type of scheduler to use")
     
     # Check whether loss weights have been set from command line arguments
     if (args.mae_loss_weight == None) or (args.mse_loss_weight == None) or (args.ms_ssim_loss_weight == None) or (args.lpips_loss_weight == None) or (args.kl_loss_weight_values == None) or (args.kl_loss_weight_epochs == None) or (args.geometry_loss_weight == None):
@@ -387,13 +391,20 @@ if __name__ == "__main__":
         # TODO: this doesn't work if passing argument like this in command line: --init_lr=0.0001
         # only works like this: --init_lr 0.0001
         import sys
-        if "--init_lr" in sys.argv and "--lr_gamma" in sys.argv and "--patience" in sys.argv:
+        if "--init_lr" in sys.argv and "--lr_gamma" in sys.argv and "--milestones" in sys.argv:
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = args.init_lr
+            # for MultiStepLR resume training, set milestones epochs relative to resume points
+            # E.g., if resuming from epoch 1000 and want LR decay at 1500, keep milestone as 500 (not 1500).
+            scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer=optimizer, milestones=args.milestones, gamma=args.lr_gamma)
+            console_logger.debug(f"Reset learning rate to {args.init_lr}, milestone epochs to {args.milestones}, learning rate decay factor to {args.lr_gamma}")
+        elif "--init_lr" in sys.argv and "--lr_gamma" in sys.argv and "--patience" in sys.argv:
             for param_group in optimizer.param_groups:
                 param_group['lr'] = args.init_lr
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode='min', factor=args.lr_gamma, patience=args.patience)
             console_logger.debug(f"Reset learning rate to {args.init_lr}, patience epochs to {args.patience}, learning rate decay factor to {args.lr_gamma}")
-        elif "--init_lr" in sys.argv or "--lr_gamma" in sys.argv or "--patience" in sys.argv:
-            raise RuntimeError("Only reset either init_lr, lr_gamma, or patience for resuming training, please reset three arguments at the same time")
+        elif "--init_lr" in sys.argv or "--lr_gamma" in sys.argv or "--patience" in sys.argv or "--milestones" in sys.argv:
+            raise RuntimeError("Only reset either init_lr, lr_gamma, patience, or milestones for resuming training, please reset three arguments at the same time")
         else:
             scheduler.load_state_dict(loaded_ckpt["scheduler_state_dict"])
             console_logger.debug(f"Use original learning rate and scheduler settings")
