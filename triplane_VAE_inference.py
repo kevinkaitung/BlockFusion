@@ -90,4 +90,4 @@ if __name__ == "__main__":
             output[0] = ((output[0] - min) / (max - min)) * (original_max - original_min) + original_min
             loaded_model['triplane_state_dict'][f"{batch_idx}.triplane"] = output[0]
     
-    torch.save(loaded_model, "VAE_Reconstructed_triplane_ch_32.pt")
+    torch.save(loaded_model, os.path.join(args.expdir, f"VAE_Reconstructed_triplane.pt"))
