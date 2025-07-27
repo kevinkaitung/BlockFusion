@@ -53,7 +53,7 @@ if __name__ == "__main__":
     # prepare raw volumes dataset for evaluation
     train_dataloader = torch.utils.data.DataLoader(
         TimevaryingDataset(
-            raw_data_prefix="/media/data/qadwu/volume/vortices",
+            raw_data_prefix="/home/kctung/vortices",
             raw_data_filename_without_timestep="vorts",
             file_ext="data",
             res=data_res,
