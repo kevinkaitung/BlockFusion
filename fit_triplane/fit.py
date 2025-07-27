@@ -264,6 +264,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='base_timevarying.json')
     parser.add_argument("--expname", type=str, default="finetune_VAE_recon_triplanes", help="Experiment name")
+    # resume training only works for fine-tuneing triplane model now
     parser.add_argument('--resume_training_model', type=str, default=None)
     args = parser.parse_args()
 
