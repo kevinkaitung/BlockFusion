@@ -1,3 +1,40 @@
+# BlockFusion for Volumetric Scalar field data
+
+### Environment Setup (if running on Sophia):
+Use this module:
+```
+module use /soft/modulefiles; module load conda; conda activate base
+```
+And install missing packages:
+```
+pip install --user easydict
+```
+
+### Stage 1 Training - Triplane Overfitting:
+
+Please go into `./fit_triplane` and follow the instructions.
+
+### Stage 2 Training - Variational Autoencoder Training on Triplanes
+
+To train Variational Autoencoder, run the following sample command (Please specify `--pretrained_triplane_file_path`):
+```
+python triplane_VAE_training.py --expname="various_loss_combination_exp" \
+ --description="L1 + L2 + Geo loss combination (No MS-SSIM) (lr scheduling and KL-annealing roughly following the record from logs/triplane_model_g/20250703-184718)" \
+ --batch_size=6 --epochs=2100 --ckpt_freq=500 --model_config=model_g \
+ --mae_loss_weight 1.0 --mse_loss_weight 0.5 --ms_ssim_loss_weight 0.0 --lpips_loss_weight 0.0 \
+ --kl_loss_weight_values 0.000001 0.00001 0.00005 --kl_loss_weight_epochs 0 500 1000 \
+ --geometry_loss_weight 0.8 --scheduler_type MultiStepLR \
+ --init_lr 0.0001 --lr_gamma 0.5 --milestones 500 1000 1213 1500 1650 1750 1850 1925 2000 2050 \
+ --pretrained_triplane_file_path path_to_pretrained_triplanes_file
+```
+
+To inference and reconstruct triplanes with pre-trained Variational Autoencoder, run the following sample command (Please specify `--expdir` and `--model_file_name`):
+```
+python triplane_VAE_inference.py --expdir path_to_the_experiment_directory_created_when_training_VAE --model_file_name filename_of_the_model_used_to_inference --model_config model_g
+```
+
+For distributed training and jobs submission example, you can refer to `./sophia_exp/exp_mae_mse_geo_example.sh` (Please specify project name at the first line of the bash script)
+
 # BlockFusion: Expandable 3D Scene Generation using Latent Tri-plane Extrapolation 
 
 ### ACM Transactions on Graphics (SIGGRAPH'24)
