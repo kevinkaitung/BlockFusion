@@ -47,6 +47,8 @@ def parse_args():
     parser.add_argument("--geometry_loss_weight", type=float, default=None, help="Weights of geometry_loss") # default = 0.35
     parser.add_argument("--kl_loss_weight_values", type=float, nargs='*', default=None, help="Weight values of kl_loss") # default = [0.00001]
     parser.add_argument("--kl_loss_weight_epochs", type=int, nargs='*', default=None, help="Epochs to change weights of kl_loss") # default = [0]
+
+    parser.add_argument("--pretrained_triplane_file_path", type=str, default="fit_triplane/ch_32_saved_model.ckpt", help="File Path to Pretrained Triplanes Model")
     return parser.parse_args()
 
 def regenerate_sampled_points(dataset_for_sampling):
@@ -333,7 +335,7 @@ if __name__ == "__main__":
     logging.getLogger('matplotlib').setLevel(logging.WARNING)
 
     # load pretrained tri-plane here
-    loaded_model = torch.load("fit_triplane/ch_32_saved_model.ckpt")
+    loaded_model = torch.load(args.pretrained_triplane_file_path)
     triplane_weights = [loaded_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_timesteps)]
     triplane_weights = torch.cat(triplane_weights, dim=0)
     

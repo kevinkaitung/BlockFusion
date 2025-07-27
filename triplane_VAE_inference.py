@@ -16,6 +16,8 @@ def parse_args():
     parser.add_argument("--expdir", type=str, default="./logs/test_hashencoding_train/20250508-024915", help="Checkpoint Directory to load the model from")
     parser.add_argument("--model_file_name", type=str, default="vae_model_epoch_9999.ckpt", help="Model file name")
     parser.add_argument("--model_config", type=str, default="model_a", help="Model config file name")
+    
+    parser.add_argument("--pretrained_triplane_file_path", type=str, default="fit_triplane/ch_32_saved_model.ckpt", help="File Path to Pretrained Triplanes Model")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -35,7 +37,7 @@ if __name__ == "__main__":
     n_timesteps = 90
     
     # load pretrained tri-plane here
-    loaded_model = torch.load("fit_triplane/ch_32_saved_model.ckpt")
+    loaded_model = torch.load(args.pretrained_triplane_file_path)
     triplane_weights = [loaded_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_timesteps)]
     triplane_weights = torch.cat(triplane_weights, dim=0)
     # TODO: check whether it makes sense to pass vae_config["plane_shape"] into LatentWeightDataset

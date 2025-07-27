@@ -27,7 +27,9 @@ def parse_args():
     parser.add_argument("--model_config", type=str, default="model_a", help="Model config file name")
     parser.add_argument("--encode_or_decode", type=str, default="encode", help="Extract latent if encode; map latent back to its original weights if decode")
     parser.add_argument("--diffusion_dir", type=str, default="")
-    parser.add_argument("--diffusion_model_file_name", type=str, default="")
+    parser.add_argument("--diffusion_latent_triplane_file_name", type=str, default="")
+    
+    parser.add_argument("--pretrained_triplane_file_path", type=str, default="fit_triplane/ch_32_saved_model.ckpt", help="File Path to Pretrained Triplanes Model")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -52,7 +54,7 @@ if __name__ == "__main__":
     n_timesteps = 90
     
     # load pretrained tri-plane here
-    pretrained_triplane_model = torch.load("fit_triplane/ch_32_saved_model.ckpt")
+    pretrained_triplane_model = torch.load(args.pretrained_triplane_file_path)
     triplane_weights = [pretrained_triplane_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_timesteps)]
     triplane_weights = torch.cat(triplane_weights, dim=0)
     # normalization for training all volumes
@@ -66,7 +68,7 @@ if __name__ == "__main__":
     if not is_encode:
         # need to load diffusion-pretrained latent weights
         # TODO: make sure the key name aligns with the one generated in diffusion_inference.py
-        latent_weights = torch.load(os.path.join(args.diffusion_dir, args.diffusion_model_file_name))["weights_latent_space"]
+        latent_weights = torch.load(os.path.join(args.diffusion_dir, args.diffusion_latent_triplane_file_name))["weights_latent_space"]
         
     
     if is_encode:
