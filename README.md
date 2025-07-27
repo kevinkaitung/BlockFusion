@@ -28,6 +28,8 @@ python triplane_VAE_training.py --expname="various_loss_combination_exp" \
  --pretrained_triplane_file_path path_to_pretrained_triplanes_file
 ```
 
+Notes: VAE ckpt models can be large in size (about 9 GB), make sure to have enough space to save all ckpt files.
+
 To inference and reconstruct triplanes with pre-trained Variational Autoencoder, run the following sample command (Please specify `--expdir` and `--model_file_name`):
 ```
 python triplane_VAE_inference.py --expdir path_to_the_experiment_directory_created_when_training_VAE --model_file_name filename_of_the_model_used_to_inference --model_config model_g
