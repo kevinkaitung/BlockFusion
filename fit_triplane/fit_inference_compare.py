@@ -125,7 +125,7 @@ if __name__ == "__main__":
     # After the PSNR printing loop, add:
     plt.figure(figsize=(10, 6))
     for idx in range(len(psnr_lists)):
-        plt.plot(range(len(psnr_lists[idx])), psnr_lists[idx], label=f'{args.triplane_recon_types[idx]} PSNR')
+        plt.plot(range(len(psnr_lists[idx])), psnr_lists[idx], label=f'{args.triplane_recon_types[idx]} PSNR (avg: {torch.mean(torch.stack(psnr_lists[idx])):0,.4f})')
     plt.xlabel('Timestep')
     plt.ylabel('PSNR (dB)')
     plt.title('PSNR across Timesteps')
