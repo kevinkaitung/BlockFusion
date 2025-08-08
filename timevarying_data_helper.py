@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import torch
+import glob
 
 class TimevaryingDataset(torch.utils.data.Dataset):
     def __init__(
@@ -120,6 +121,92 @@ class SampleTimevaryingDataset(torch.utils.data.Dataset):
                 +        lerp_weights[:,0] *  (1 - lerp_weights[:,1]) *      lerp_weights[:,2] * c101
                 +        lerp_weights[:,0] *       lerp_weights[:,1] *       lerp_weights[:,2] * c111)
 
+class SampleShadowVolumesDataset(torch.utils.data.Dataset):
+    def __init__(
+        self, raw_data_dir, raw_data_filename_prefix, file_ext, res, n_instances, n_channels,
+        sample_batch_size=2**10
+    ):
+        self.volumes = []
+        self.n_instances = n_instances
+        self.n_channels = n_channels
+        self.res = res
+        self.sample_batch_size = sample_batch_size
+        self.data_min = 0.0
+        self.data_max = 1.0
+        self.value_range = self.data_max - self.data_min
+        
+        # Find all files starting with "shadow" and ending with your file extension
+        pattern = os.path.join(raw_data_dir, f"{raw_data_filename_prefix}*.{file_ext}")
+        file_list = sorted(glob.glob(pattern))  # sorted ensures consistent order (would be lexicographic order)
+        for filepath in file_list:
+            with open(filepath, "rb") as f:
+                # f.seek(offset * np.dtype(dtype).itemsize)
+                # only read the chunk of the data assigned by the shape
+                volume = np.frombuffer(f.read(res[0] * res[1] * res[2] * n_channels * np.dtype(np.float32).itemsize), dtype=np.float32)
+                # cast volume data into float32
+                # TODO: (the order of res to put into reshape should double check)
+                # temporarily ignore since its the cube volume
+                volume = volume.astype(np.float32).reshape([res[2], res[1], res[0], n_channels])
+                # convert to torch tensor
+                volume = torch.from_numpy(volume).cuda()
+                # normalize the volume data
+                volume = (volume - volume.min()) / (volume.max() - volume.min())
+                self.volumes.append(volume)
+        self.volumes = torch.stack(self.volumes, dim=0)
+        # permute the dimensions to match the expected input shape
+        self.volumes = self.volumes.permute(0, 4, 1, 2, 3)  # (n_timesteps, n_channels, res[2], res[1], res[0])
+    
+    def __getitem__(self, index):
+        # generate random coordinates
+        # sample_coords: [x_coords, y_coords, z_coords]
+        sample_coords = torch.rand([self.sample_batch_size, 3], dtype=torch.float32).cuda()
+        # get targets value from the volume at specified timestep
+        targets = self.sample(index, sample_coords)
+        return index, sample_coords, targets
+
+    def __len__(self):
+        return self.n_instances
+
+    # sample a batch of data from the volume at index timestep
+    def sample(self, index, input):
+        with torch.no_grad():
+            # Bilinearly filtered lookup from the image. Not super fast,
+            # but less than ~20% of the overall runtime of this example.
+            shape = self.res
+
+            input = input * torch.tensor([shape[0] - 1, shape[1] - 1, shape[2] - 1], device=input.device).float()
+            indices = input.long()
+            lerp_weights = input - indices.float()
+
+            x0 = indices[:, 0].clamp(min=0, max=shape[0] - 1)
+            y0 = indices[:, 1].clamp(min=0, max=shape[1] - 1)
+            z0 = indices[:, 2].clamp(min=0, max=shape[2] - 1)
+            x1 = (x0 + 1).clamp(max=shape[0] - 1)
+            y1 = (y0 + 1).clamp(max=shape[1] - 1)
+            z1 = (z0 + 1).clamp(max=shape[2] - 1)
+
+            # get the volumes at the specified timestep
+            # since we only have one channel (scalar field)
+            # just use the first channel (index = 0 at second dimension)
+            # self.volumes require the access pattern to be [z_coord, y_coord, x_coord]
+            c000 = self.volumes[index, 0][z0, y0, x0]
+            c010 = self.volumes[index, 0][z0, y1, x0]
+            c100 = self.volumes[index, 0][z0, y0, x1]
+            c110 = self.volumes[index, 0][z0, y1, x1]
+            c001 = self.volumes[index, 0][z1, y0, x0]
+            c011 = self.volumes[index, 0][z1, y1, x0]
+            c101 = self.volumes[index, 0][z1, y0, x1]
+            c111 = self.volumes[index, 0][z1, y1, x1]
+
+            # Trilinear interpolation
+            return ((1 - lerp_weights[:,0]) * (1 - lerp_weights[:,1]) * (1 - lerp_weights[:,2]) * c000
+                +   (1 - lerp_weights[:,0]) *      lerp_weights[:,1] *  (1 - lerp_weights[:,2]) * c010
+                +        lerp_weights[:,0] *  (1 - lerp_weights[:,1]) * (1 - lerp_weights[:,2]) * c100
+                +        lerp_weights[:,0] *       lerp_weights[:,1] *  (1 - lerp_weights[:,2]) * c110
+                +   (1 - lerp_weights[:,0]) * (1 - lerp_weights[:,1]) *      lerp_weights[:,2] * c001
+                +   (1 - lerp_weights[:,0]) *      lerp_weights[:,1] *       lerp_weights[:,2] * c011
+                +        lerp_weights[:,0] *  (1 - lerp_weights[:,1]) *      lerp_weights[:,2] * c101
+                +        lerp_weights[:,0] *       lerp_weights[:,1] *       lerp_weights[:,2] * c111)
 
 class EncodingWeightDataset(torch.utils.data.Dataset):
     def __init__(

@@ -1,0 +1,32 @@
+{
+    "pcd_num": 300000,
+    "sdf_num": 100000,
+    "max_iters": 15000,
+    "lr_net": 1e-3,
+    "lr_tri": 1e-3,
+    "batch_size": 150,
+
+    "w_eik":2.0,
+    "w_nor":5.0,
+    "w_sur":100.0,
+    "w_sdf":50.0,
+    "w_vio":100.0,
+
+    "i_print":10000,
+    "i_mesh":[],
+    "i_weight":[],
+
+    "n_layers": 4,
+    "n_hid": 128,
+    "channel": 32,
+    "resolution": 128,
+    "c2f_scale": [100,1000,3000,4000,5000],
+
+    "sample_batch_size": 8192,
+
+    "seed": 777,
+    "n_labels": 1,
+    "world_size": 1,
+    "fixmlp": "../checkpoints/mlp.tar",
+    "objpaths": "./sampledata/crop11.obj"
+}
