@@ -49,6 +49,7 @@ def parse_args():
     parser.add_argument("--kl_loss_weight_epochs", type=int, nargs='*', default=None, help="Epochs to change weights of kl_loss") # default = [0]
 
     parser.add_argument("--pretrained_triplane_file_path", type=str, default="fit_triplane/ch_32_saved_model.ckpt", help="File Path to Pretrained Triplanes Model")
+    parser.add_argument("--geometry_loss_sample_size", type=int, default=2**10, help="Sample batch size for calculating geometry loss")
     return parser.parse_args()
 
 def regenerate_sampled_points(dataset_for_sampling):
@@ -434,7 +435,6 @@ if __name__ == "__main__":
         console_logger.debug(f"Geometry Loss Weight: {args.geometry_loss_weight}")
         
     # prepare pre-sampled points' coordinates and values
-    sample_batch_size = 2**10
     dataset_for_sampling = SampleTimevaryingDataset(
         raw_data_prefix="/home/kctung/vortices",
         raw_data_filename_without_timestep="vorts",
@@ -442,7 +442,7 @@ if __name__ == "__main__":
         res=[128, 128, 128],
         n_timesteps=n_timesteps,
         n_channels=1,
-        sample_batch_size=sample_batch_size
+        sample_batch_size=args.geometry_loss_sample_size
     )
     
     # instantiate triplane models and load pre-trained MLP
