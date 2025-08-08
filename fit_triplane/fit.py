@@ -294,7 +294,8 @@ if __name__ == "__main__":
     logging.getLogger('matplotlib').setLevel(logging.WARNING)
     
     console_logger.debug("Experiment description: " + args.description)
-    console_logger.debug("Resume Training Model Path: " + args.resume_training_model)
+    if args.resume_training_model:
+        console_logger.debug("Resume Training Model Path: " + args.resume_training_model)
     console_logger.debug("Config File Name: " + args.config)
     console_logger.debug("Only finetune mlp: " + str(args.only_finetune_mlp))
     
