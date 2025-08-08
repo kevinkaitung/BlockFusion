@@ -1,8 +1,7 @@
 {
     "pcd_num": 300000,
     "sdf_num": 100000,
-    "resume_iter": 10000,
-    "max_iters": 15000,
+    "max_iters": 18000,
     "lr_net": 1e-3,
     "lr_tri": 1e-3,
     "batch_size": 90,
@@ -21,9 +20,10 @@
     "n_hid": 128,
     "channel": 32,
     "resolution": 128,
-    "c2f_scale": [],
+    "c2f_scale": [100,1000,3000,4000,5000],
 
     "sample_batch_size": 65536,
+
     "seed": 777,
     "n_labels": 1,
     "world_size": 1,

@@ -44,6 +44,7 @@ def create_optimizer(net, triplane, config):
     return torch.optim.Adam(params_to_train)
 
 def update_lr(optimizer, epoch, config):
+    # TODO: make sure the lr for finetuning is reasonable
     learning_factor = (np.cos(np.pi * epoch / config.max_iters) + 1.0) * 0.5 * (1 - 0.001) + 0.001
     for param_group in optimizer.param_groups:
         if "net" in param_group['name']:
@@ -264,8 +265,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='base_timevarying.json')
     parser.add_argument("--expname", type=str, default="finetune_VAE_recon_triplanes", help="Experiment name")
-    # resume training only works for fine-tuneing triplane model now
+    parser.add_argument("--description", type=str, default="", help="Description to experiment")
     parser.add_argument('--resume_training_model', type=str, default=None)
+    parser.add_argument('--only_finetune_mlp', action='store_true')
     args = parser.parse_args()
 
     # create directory for saving logs
@@ -291,6 +293,12 @@ if __name__ == "__main__":
     # to suppress matplotlib logging
     logging.getLogger('matplotlib').setLevel(logging.WARNING)
     
+    console_logger.debug("Experiment description: " + args.description)
+    console_logger.debug("Resume Training Model Path: " + args.resume_training_model)
+    console_logger.debug("Config File Name: " + args.config)
+    console_logger.debug("Only finetune mlp: " + str(args.only_finetune_mlp))
+    
+    
     with open(args.config, 'r') as f:
         config = json.load(f)
     config = edict(config)
@@ -315,13 +323,16 @@ if __name__ == "__main__":
     ).cuda() for _ in range(n_timesteps)]
     triplane = nn.ModuleList(triplane)
 
-    # for fine tune model (TODO: might also think about how to incorporate non-finetune resume training)
+    # for fine tune model (both for only finetune MLP, finetune triplanes+MLP, and resume training from original triplane overfitting training)
     if args.resume_training_model:
         loaded_model = torch.load(args.resume_training_model)
         net.load_state_dict(loaded_model['net_state_dict'])
         triplane.load_state_dict(loaded_model['triplane_state_dict'])
         # TODO: make sure whether I should use optimizer from pretrained triplane?
-        optimizer = create_optimizer(net, None, config)
+        if args.only_finetune_mlp:
+            optimizer = create_optimizer(net, None, config)
+        else:
+            optimizer = create_optimizer(net, triplane, config)
     else:
         optimizer = create_optimizer(net, triplane, config)
 
@@ -335,7 +346,7 @@ if __name__ == "__main__":
             res=[128, 128, 128],
             n_timesteps=n_timesteps,
             n_channels=1,
-            sample_batch_size= 2**10
+            sample_batch_size=config.sample_batch_size
         ),
         batch_size=config.batch_size,
         shuffle=True)

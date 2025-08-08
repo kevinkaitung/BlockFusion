@@ -22,6 +22,8 @@
     "resolution": 128,
     "c2f_scale": [100,1000,3000,4000,5000],
 
+    "sample_batch_size": 65536,
+
     "seed": 777,
     "n_labels": 1,
     "world_size": 1,
