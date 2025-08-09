@@ -121,6 +121,47 @@ class SampleTimevaryingDataset(torch.utils.data.Dataset):
                 +        lerp_weights[:,0] *  (1 - lerp_weights[:,1]) *      lerp_weights[:,2] * c101
                 +        lerp_weights[:,0] *       lerp_weights[:,1] *       lerp_weights[:,2] * c111)
 
+class ShadowVolumesDataset(torch.utils.data.Dataset):
+    def __init__(
+        self, raw_data_dir, raw_data_filename_prefix, file_ext, res, n_instances, n_channels
+    ):
+        self.volumes = []
+        self.n_instances = n_instances
+        self.n_channels = n_channels
+        self.res = res
+        self.data_min = 0.0
+        self.data_max = 1.0
+        self.value_range = self.data_max - self.data_min
+        
+        # Find all files starting with "shadow" and ending with your file extension
+        pattern = os.path.join(raw_data_dir, f"{raw_data_filename_prefix}*.{file_ext}")
+        file_list = sorted(glob.glob(pattern))  # sorted ensures consistent order (would be lexicographic order)
+        for filepath in file_list:
+            with open(filepath, "rb") as f:
+                # f.seek(offset * np.dtype(dtype).itemsize)
+                # only read the chunk of the data assigned by the shape
+                volume = np.frombuffer(f.read(res[0] * res[1] * res[2] * n_channels * np.dtype(np.float32).itemsize), dtype=np.float32)
+                # cast volume data into float32
+                # TODO: (the order of res to put into reshape should double check)
+                # temporarily ignore since its the cube volume
+                volume = volume.astype(np.float32).reshape([res[2], res[1], res[0], n_channels])
+                # convert to torch tensor
+                volume = torch.from_numpy(volume).cuda()
+                # normalize the volume data
+                volume = (volume - volume.min()) / (volume.max() - volume.min())
+                self.volumes.append(volume)
+        self.volumes = torch.stack(self.volumes, dim=0)
+        # permute the dimensions to match the expected input shape
+        self.volumes = self.volumes.permute(0, 4, 1, 2, 3)  # (n_timesteps, n_channels, res[2], res[1], res[0])
+    
+    def __getitem__(self, index):
+        if index >= self.n_instances:
+            raise IndexError(f"Index {index} out of bounds (n_params={self.n_instances})")
+        return self.volumes[index]
+
+    def __len__(self):
+        return self.n_instances
+
 class SampleShadowVolumesDataset(torch.utils.data.Dataset):
     def __init__(
         self, raw_data_dir, raw_data_filename_prefix, file_ext, res, n_instances, n_channels,
