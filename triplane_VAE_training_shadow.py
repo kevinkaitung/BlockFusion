@@ -194,7 +194,10 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
                 # else:
                 #     debug = False
                 debug = False
-                geometry_loss = geometry_loss_weight * calculate_geometry_loss(net, triplane, raw_data[1], sample_coords, target_values, debug)
+                if geometry_loss_weight != 0.0:
+                    geometry_loss = geometry_loss_weight * calculate_geometry_loss(net, triplane, raw_data[1], sample_coords, target_values, debug)
+                else:
+                    geometry_loss = torch.tensor(0).cuda()
                 loss = mae_loss + mse_loss + kl_loss + ms_ssim_loss + lpips_loss + geometry_loss
                 # loss = recon_loss
             scalar.scale(loss).backward()
