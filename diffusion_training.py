@@ -22,7 +22,7 @@ def parse_args():
     parser.add_argument("--patience", type=int, default=None, help="Number of patience epochs to decay learning rate")
     parser.add_argument("--resume_training_dir", type=str, default=None, help="Directory to resume training from")
     parser.add_argument("--resume_model_file_name", type=str, default=None, help="Model file name to resume training from")
-    parser.add_argument("--latent_triplanes_dir", type=str, default=None, help="Directory where latent triplanes are stored")
+    parser.add_argument("--latent_triplanes_file_path", type=str, default=None, help="Directory where latent triplanes are stored")
     return parser.parse_args()
 
 def train_diffusion(model, train_dataloader, noise_scheduler, optimizer, scheduler, epochs, tensorboard_writer=None, console_logger=None, run_dir=None, ckpt_freq=100, resume_epoch=0):
@@ -98,7 +98,7 @@ def train_diffusion(model, train_dataloader, noise_scheduler, optimizer, schedul
 if __name__ == "__main__":
     args = parse_args()
     
-    n_timesteps = 90
+    # n_timesteps = 90
     
     if args.resume_training_dir and args.resume_model_file_name:
         run_dir = args.resume_training_dir
@@ -136,7 +136,7 @@ if __name__ == "__main__":
     # triplane_weights = [loaded_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_timesteps)]
     # triplane_weights = torch.cat(triplane_weights, dim=0)
     
-    loaded_model = torch.load(os.path.join(args.latent_triplanes_dir, "latent_triplanes.pt"))
+    loaded_model = torch.load(args.latent_triplanes_file_path)
     latent_weights = loaded_model["weights_latent_space"]
     # normalize latent triplanes to -1~1 for diffusion training
     latent_weights = (latent_weights - latent_weights.min()) / (latent_weights.max() - latent_weights.min())
