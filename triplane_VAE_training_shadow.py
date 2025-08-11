@@ -131,7 +131,7 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
     # lpips = LearnedPerceptualImagePatchSimilarity(net_type='squeeze').cuda()
     
     for epoch in range(epochs):
-        if epoch % regenerate_sampled_points_freq == 0:
+        if (epoch % regenerate_sampled_points_freq == 0) and (geometry_loss_weight != 0.0):
             # generate sampled coords and their corresponding target values
             sample_coords, target_values = regenerate_sampled_points(dataset_for_sampling)
         
@@ -188,13 +188,13 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
                 # lpips_loss = lpips_loss_weight * lpips(output[0].reshape([-1, 1, output[0].shape[3], output[0].shape[4]]).expand(-1, 3, -1, -1), raw_data[0].reshape([-1, 1, raw_data[0].shape[3], raw_data[0].shape[4]]).expand(-1, 3, -1, -1))
                 lpips_loss = torch.tensor(0).cuda()
                 # load VAE-reconstructed triplanes into triplane models
-                load_params_to_triplane(triplane, output[0], original_triplane_min, original_triplane_max, min, max)
                 # if (epoch % ckpt_freq == (ckpt_freq - 1)) or (epoch == (epochs + resume_epoch) - 1):
                 #     debug = True
                 # else:
                 #     debug = False
                 debug = False
                 if geometry_loss_weight != 0.0:
+                    load_params_to_triplane(triplane, output[0], original_triplane_min, original_triplane_max, min, max)
                     geometry_loss = geometry_loss_weight * calculate_geometry_loss(net, triplane, raw_data[1], sample_coords, target_values, debug)
                 else:
                     geometry_loss = torch.tensor(0).cuda()
@@ -448,20 +448,26 @@ if __name__ == "__main__":
     #     n_channels=1,
     #     sample_batch_size=args.geometry_loss_sample_size
     # )
-    dataset_for_sampling = SampleShadowVolumesDataset(
-        raw_data_dir="/home/kctung/Ring1Light",
-        raw_data_filename_prefix="shadow",
-        file_ext="bin",
-        res=[256, 256, 256],
-        n_instances=n_instances,
-        n_channels=1,
-        sample_batch_size=args.geometry_loss_sample_size
-    )
-    
-    # instantiate triplane models and load pre-trained MLP
-    triplane_config_path = "fit_triplane/base_shadows.json"
-    net, triplane = create_triplane_model(triplane_config_path, args.batch_size)
-    net.load_state_dict(loaded_model['net_state_dict'])
+    if args.geometry_loss_weight != 0.0:
+        dataset_for_sampling = SampleShadowVolumesDataset(
+            raw_data_dir="/home/kctung/Ring1Light",
+            raw_data_filename_prefix="shadow",
+            file_ext="bin",
+            res=[256, 256, 256],
+            n_instances=n_instances,
+            n_channels=1,
+            sample_batch_size=args.geometry_loss_sample_size
+        )
+        
+        # instantiate triplane models and load pre-trained MLP
+        triplane_config_path = "fit_triplane/base_shadows.json"
+        net, triplane = create_triplane_model(triplane_config_path, args.batch_size)
+        net.load_state_dict(loaded_model['net_state_dict'])
+    # if not using geometry loss, don't waste memory sapce
+    else:
+        dataset_for_sampling = None
+        net = None
+        triplane = None
     
     train_vae(vae_model, train_dataloader, optimizer, scheduler, args.epochs, tensorboard_writer, console_logger, run_dir, args.ckpt_freq, resume_epoch,
               args.mae_loss_weight, args.mse_loss_weight, args.ms_ssim_loss_weight, args.lpips_loss_weight, args.kl_loss_weight_values, args.kl_loss_weight_epochs,
