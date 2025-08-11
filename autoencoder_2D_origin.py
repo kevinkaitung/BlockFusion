@@ -1803,7 +1803,7 @@ class VAE(nn.Module):
 
 class VAE_no_KL(nn.Module):
     def __init__(self, vae_config, encoder_dims, feature_size_encoder, decoder_dims, feature_size_decoder, fpn_encoders_layer_dim_idx,
-                 fpn_decoders_layer_dim_idx, fpn_encoders_down_idx, fpn_encoders_up_idx, fpn_decoders_down_idx, fpn_decoders_up_idx, block_config, is_single_triplane=False) -> None:
+                 fpn_decoders_layer_dim_idx, fpn_encoders_down_idx, fpn_encoders_up_idx, fpn_decoders_down_idx, fpn_decoders_up_idx, block_config, is_JSD_loss=False, is_single_triplane=False) -> None:
         super(VAE_no_KL, self).__init__()
 
         kl_std = vae_config.get("kl_std", 0.25)
@@ -1829,6 +1829,8 @@ class VAE_no_KL(nn.Module):
         
         self.kl_std = kl_std
         self.kl_weight = kl_weight
+        
+        self.is_JSD_loss = is_JSD_loss
 
         self.num_heads = num_heads
         self.transform_depth = transform_depth
@@ -2084,18 +2086,43 @@ class VAE_no_KL(nn.Module):
             # print("latent shape: ", latent.shape) # (B, dim)
             l2_size_loss = torch.sum(torch.norm(latent, dim=-1))
             kl_loss = l2_size_loss / latent.shape[0]
-
+            return self.kl_weight * kl_loss
         else:
-            std = torch.exp(torch.clamp(0.5 * log_var, max=10)) + 1e-6
-            gt_dist = torch.distributions.normal.Normal(torch.zeros_like(mu), torch.ones_like(std) * self.kl_std)
-            sampled_dist = torch.distributions.normal.Normal(mu, std)
-            # gt_dist = normal_dist.sample(log_var.shape)
-            # print("gt dist shape: ", gt_dist.shape)
+            if self.is_JSD_loss:
+                std = torch.exp(0.5 * torch.clamp(log_var, min=-10, max=10)) + 1e-6
+                P = torch.distributions.Normal(torch.zeros_like(mu), torch.ones_like(std) * self.kl_std)  # prior
+                Q = torch.distributions.Normal(mu, std)  # posterior
 
-            kl = torch.distributions.kl.kl_divergence(sampled_dist, gt_dist)  # reversed KL
-            kl_loss = reduce(kl, 'b ... -> b (...)', 'mean').mean()
+                n_samples = 100  # increase from 1 for stability
+                q_samples = Q.rsample((n_samples,))
+                p_samples = P.rsample((n_samples,))
 
-        return self.kl_weight * kl_loss
+                log_p_q = P.log_prob(q_samples)
+                log_q_q = Q.log_prob(q_samples)
+                log_p_p = P.log_prob(p_samples)
+                log_q_p = Q.log_prob(p_samples)
+
+                # More stable mixture log-probability
+                log_m_q = torch.logsumexp(torch.stack([log_p_q, log_q_q], dim=0), dim=0) - torch.log(torch.tensor(2.0))
+                log_m_p = torch.logsumexp(torch.stack([log_p_p, log_q_p], dim=0), dim=0) - torch.log(torch.tensor(2.0))
+
+                kl_q_m = log_q_q - log_m_q
+                kl_p_m = log_p_p - log_m_p
+
+                # Match your original reduction pattern
+                jsd = 0.5 * (kl_q_m + kl_p_m)
+                jsd_loss = reduce(jsd, 'n b ... -> b (...)', 'mean').mean()  # n=samples, b=batch
+                return self.kl_weight * jsd_loss
+            else:
+                std = torch.exp(torch.clamp(0.5 * log_var, max=10)) + 1e-6
+                gt_dist = torch.distributions.normal.Normal(torch.zeros_like(mu), torch.ones_like(std) * self.kl_std)
+                sampled_dist = torch.distributions.normal.Normal(mu, std)
+                # gt_dist = normal_dist.sample(log_var.shape)
+                # print("gt dist shape: ", gt_dist.shape)
+
+                kl = torch.distributions.kl.kl_divergence(sampled_dist, gt_dist)  # reversed KL
+                kl_loss = reduce(kl, 'b ... -> b (...)', 'mean').mean()
+                return self.kl_weight * kl_loss
 
     def sample(self,
                num_samples: int,
