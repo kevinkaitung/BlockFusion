@@ -32,7 +32,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="UNet Diffusion Inference for latent triplanes")
     parser.add_argument("--expdir", type=str, default="logs/UNet_diffusion_exp/20250624-162156", help="Checkpoint Directory to load the model from")
     parser.add_argument("--model_file_name", type=str, default="vae_model_epoch_9999.ckpt", help="Model file name")
-    parser.add_argument("--latent_triplanes_dir", type=str, default="logs/triplane_AE_model_a/20250619-000758", help="Directory where latent triplanes are stored")
+    parser.add_argument("--latent_triplanes_file_path", type=str, default="logs/triplane_AE_model_a/20250619-000758", help="Directory where latent triplanes are stored")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size of generated samples")
     return parser.parse_args()
 
@@ -58,7 +58,7 @@ if __name__ == "__main__":
     # model.eval()
 
     # pretrained_triplane_model = torch.load("fit_triplane/ch_32_saved_model.ckpt")
-    latent_triplanes = torch.load(os.path.join(args.latent_triplanes_dir, "latent_triplanes.pt"))
+    latent_triplanes = torch.load(args.latent_triplanes_file_path)
     latent_triplanes = latent_triplanes["weights_latent_space"]
 
     # Setup scheduler (should match the one used in training)

@@ -28,6 +28,7 @@ def parse_args():
     parser.add_argument("--encode_or_decode", type=str, default="encode", help="Extract latent if encode; map latent back to its original weights if decode")
     parser.add_argument("--diffusion_dir", type=str, default="")
     parser.add_argument("--diffusion_latent_triplane_file_name", type=str, default="")
+    parser.add_argument("--n_instances", type=int, default=90, help="Number of instances in the dataset (i.e., n_timesteps)")
     
     parser.add_argument("--pretrained_triplane_file_path", type=str, default="fit_triplane/ch_32_saved_model.ckpt", help="File Path to Pretrained Triplanes Model")
     return parser.parse_args()
@@ -50,12 +51,10 @@ if __name__ == "__main__":
     # pretrained_vae_model = torch.load("logs/triplane_VAE_ch_32_single_volume/20250614-180226/vae_model_epoch_9999.ckpt")
     # pretrained_vae_model = torch.load("logs/triplane_AE_model_a/20250619-000758/vae_model_epoch_1399.ckpt")
     vae_model.load_state_dict(torch.load(os.path.join(args.expdir, args.model_file_name), weights_only=False)["model_state_dict"])
-    
-    n_timesteps = 90
-    
+        
     # load pretrained tri-plane here
     pretrained_triplane_model = torch.load(args.pretrained_triplane_file_path)
-    triplane_weights = [pretrained_triplane_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_timesteps)]
+    triplane_weights = [pretrained_triplane_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(args.n_instances)]
     triplane_weights = torch.cat(triplane_weights, dim=0)
     # normalization for training all volumes
     original_min = triplane_weights.min()
@@ -116,7 +115,7 @@ if __name__ == "__main__":
     if is_encode:
         torch.save({"weights_latent_space": outputs}, os.path.join(args.expdir, "latent_triplanes.pt"))
     else:
-        for idx in range(n_timesteps):
+        for idx in range(args.n_instances):
             # since we only use one diffusion-generated sample, copy it for all timesteps
             # replace original triplanes with the newly generated ones, and store as new triplanes
             # TODO:
