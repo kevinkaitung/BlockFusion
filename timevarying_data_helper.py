@@ -2,6 +2,7 @@ import os
 import numpy as np
 import torch
 import glob
+import json
 
 class TimevaryingDataset(torch.utils.data.Dataset):
     def __init__(
@@ -120,6 +121,34 @@ class SampleTimevaryingDataset(torch.utils.data.Dataset):
                 +   (1 - lerp_weights[:,0]) *      lerp_weights[:,1] *       lerp_weights[:,2] * c011
                 +        lerp_weights[:,0] *  (1 - lerp_weights[:,1]) *      lerp_weights[:,2] * c101
                 +        lerp_weights[:,0] *       lerp_weights[:,1] *       lerp_weights[:,2] * c111)
+            
+class ShadowVolumesMetaDataset(torch.utils.data.Dataset):
+    def __init__(
+        self, raw_data_dir, raw_data_filename_prefix, file_ext, n_instances
+    ):
+        self.n_instances = n_instances
+        self.lighting_dirs = []
+        
+        # Find all files starting with "shadow" and ending with your file extension
+        pattern = os.path.join(raw_data_dir, f"{raw_data_filename_prefix}*.{file_ext}")
+        file_list = sorted(glob.glob(pattern))  # sorted ensures consistent order (would be lexicographic order)
+        for filepath in file_list:
+            with open(filepath, "r") as f:
+                shadow_meta = json.load(f)
+                direction=shadow_meta["view"]["lightSource"]["position"]
+                dir_tensor = torch.tensor([direction["x"], direction["y"], direction['z']], dtype=torch.float32).cuda()
+                self.lighting_dirs.append(dir_tensor)
+        
+        self.lighting_dirs = torch.stack(self.lighting_dirs, dim=0)
+        
+        
+    def __getitem__(self, index):
+        # if index >= self.n_instances:
+        #     raise IndexError(f"Index {index} out of bounds (n_params={self.n_instances})")
+        return self.lighting_dirs[index]
+
+    def __len__(self):
+        return self.n_instances
 
 class ShadowVolumesDataset(torch.utils.data.Dataset):
     def __init__(

@@ -1,9 +1,10 @@
 import torch
 import torch.nn.functional as F
-from diffusers import DDPMScheduler, Conv3DAwareUNet
+from diffusers import DDPMScheduler, Conv3DAwareUNet, Conv3DAwareUNet2DConditionModel
 import numpy as np
-from timevarying_data_helper import LatentWeightDataset
+from timevarying_data_helper import LatentWeightDataset, ShadowVolumesMetaDataset
 import os
+import math
 
 import logging
 from datetime import datetime
@@ -25,7 +26,36 @@ def parse_args():
     parser.add_argument("--latent_triplanes_file_path", type=str, default=None, help="Directory where latent triplanes are stored")
     return parser.parse_args()
 
-def train_diffusion(model, train_dataloader, noise_scheduler, optimizer, scheduler, epochs, tensorboard_writer=None, console_logger=None, run_dir=None, ckpt_freq=100, resume_epoch=0):
+# simple embedding for testing
+class NumberEmbedder(torch.nn.Module):
+    def __init__(self, embed_dim_in, embed_dim_out):
+        super().__init__()
+        self.proj = torch.nn.Linear(embed_dim_in, embed_dim_out)
+
+    def forward(self, numbers):
+        return self.proj(numbers)
+
+num_freqs = 64
+# number of freqs * 3 coordinates * 2 (sin and cos)
+embed_dim = num_freqs * 3 * 2
+
+# copy from diffusers/models/embeddings.py
+class FourierEmbedder(torch.nn.Module):
+    def __init__(self, num_freqs=64, temperature=100):
+        super().__init__()
+
+        self.num_freqs = num_freqs
+        self.temperature = temperature
+
+        freq_bands = temperature ** (torch.arange(num_freqs) / num_freqs)
+        freq_bands = freq_bands[None, None, None]
+        self.register_buffer("freq_bands", freq_bands, persistent=False)
+
+    def __call__(self, x):
+        x = self.freq_bands * x.unsqueeze(-1)
+        return torch.stack((x.sin(), x.cos()), dim=-1).permute(0, 1, 3, 4, 2).reshape(*x.shape[:2], -1)
+
+def train_diffusion(model, train_dataloader, shadow_meta_dataset, noise_scheduler, optimizer, scheduler, epochs, positional_embedder, tensorboard_writer=None, console_logger=None, run_dir=None, ckpt_freq=100, resume_epoch=0):
     # Training loop
     model.train()
     
@@ -41,6 +71,7 @@ def train_diffusion(model, train_dataloader, noise_scheduler, optimizer, schedul
         total_elems = 0
 
         for batch_idx, clean_images in enumerate(train_dataloader):
+            indices = clean_images[1]
             clean_images = clean_images[0]
             # only permute for raw triplanes and reshape (stack 3 triplanes) along the last dimension -> [B, C, H, W * 3 (triplanes)]
             # clean_images = clean_images.permute(0, 2, 3, 1, 4).reshape(clean_images.shape[0], clean_images.shape[2], clean_images.shape[3], clean_images.shape[4]*3)
@@ -52,9 +83,12 @@ def train_diffusion(model, train_dataloader, noise_scheduler, optimizer, schedul
 
             # Add noise to images
             noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps)
-
+            
+            pos_embed = positional_embedder(shadow_meta_dataset[indices])
+            # make the shape to be [batch_size, sequence_length (currently one for representing one light), feature_dim]
+            pos_embed = pos_embed[0].unsqueeze(1)
             # Predict the noise
-            noise_pred = model(noisy_images, timesteps).sample
+            noise_pred = model(noisy_images, timesteps, pos_embed).sample
 
             # Loss = predicted noise vs true noise
             loss = F.mse_loss(noise_pred, noise)
@@ -149,6 +183,14 @@ if __name__ == "__main__":
     dataset = LatentWeightDataset(
         latent_weights,
         [z_shape[0], z_shape[1], z_shape[2] * 3])
+    shadow_meta_dataset = ShadowVolumesMetaDataset(
+        raw_data_dir="/media/storage0/qadwu/projects/hyperinr-data-vis2023/shadowmap/Ring1Light",
+        raw_data_filename_prefix="shadow",
+        file_ext="json",
+        n_instances=len(dataset),
+    )
+    # number_embedder = NumberEmbedder(24, embed_dim).cuda()
+    positional_embedder = FourierEmbedder(num_freqs=num_freqs).cuda()
     train_dataloader = torch.utils.data.DataLoader(dataset,
         batch_size=args.batch_size,
         shuffle=True)
@@ -163,19 +205,35 @@ if __name__ == "__main__":
     #     shuffle=True)
     # input_tensor = torch.randn(2, 3, 32, 128, 128)
     
-    model = Conv3DAwareUNet(
+    # model = Conv3DAwareUNet(
+    #     sample_size=z_shape[1:],
+    #     in_channels=z_shape[0],
+    #     out_channels=z_shape[0],
+    #     block_out_channels=(128, 256, 512, 1024),
+    #     layers_per_block=3
+    #     # rest of the arguments uses default values
+    # ).cuda()
+    
+    model = Conv3DAwareUNet2DConditionModel(
         sample_size=z_shape[1:],
         in_channels=z_shape[0],
         out_channels=z_shape[0],
+        down_block_types=("DownBlock2D", "SimpleCrossAttnDownBlock2D", "SimpleCrossAttnDownBlock2D", "SimpleCrossAttnDownBlock2D"),
+        up_block_types=("SimpleCrossAttnUpBlock2D", "SimpleCrossAttnUpBlock2D", "SimpleCrossAttnUpBlock2D", "UpBlock2D"),
         block_out_channels=(128, 256, 512, 1024),
-        layers_per_block=3
+        layers_per_block=2,
+        cross_attention_dim=embed_dim,
         # rest of the arguments uses default values
     ).cuda()
     
-    input_tensor = next(iter(train_dataloader))[0]
+    input_tensor = next(iter(train_dataloader))
+    
+    pos_embed = positional_embedder(shadow_meta_dataset[input_tensor[1]])
+    # make the shape to be [batch_size, sequence_length (currently one for representing one light), feature_dim]
+    pos_embed = pos_embed[0].unsqueeze(1)
     # only permute for raw triplanes to comply with the model input shape
     # input_tensor = input_tensor.permute(0, 2, 3, 1, 4).reshape(batch_size, plane_shape[1], plane_shape[2], plane_shape[3]*3)
-    output = model(input_tensor, 100)
+    output = model(input_tensor[0], 100, pos_embed)
     print(f"example output: {output.sample.shape}")
     
     # # UNet model
@@ -229,4 +287,4 @@ if __name__ == "__main__":
         console_logger.debug(f"Batch Size: {args.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
         console_logger.debug(f"Initial Learning rate: {args.init_lr}, Patience Epochs: {args.patience}, Learning rate Decay Factor: {args.lr_gamma}")
     
-    train_diffusion(model, train_dataloader, noise_scheduler, optimizer, scheduler, args.epochs, tensorboard_writer, console_logger, run_dir, args.ckpt_freq, resume_epoch)
+    train_diffusion(model, train_dataloader, shadow_meta_dataset, noise_scheduler, optimizer, scheduler, args.epochs, positional_embedder, tensorboard_writer, console_logger, run_dir, args.ckpt_freq, resume_epoch)
