@@ -127,6 +127,7 @@ class ShadowVolumesMetaDataset(torch.utils.data.Dataset):
         self, raw_data_dir, raw_data_filename_prefix, file_ext, n_instances
     ):
         self.n_instances = n_instances
+        self.file_names = []
         self.lighting_dirs = []
         
         # Find all files starting with "shadow" and ending with your file extension
@@ -137,6 +138,7 @@ class ShadowVolumesMetaDataset(torch.utils.data.Dataset):
                 shadow_meta = json.load(f)
                 direction=shadow_meta["view"]["lightSource"]["position"]
                 dir_tensor = torch.tensor([direction["x"], direction["y"], direction['z']], dtype=torch.float32).cuda()
+                self.file_names.append(filepath)
                 self.lighting_dirs.append(dir_tensor)
         
         self.lighting_dirs = torch.stack(self.lighting_dirs, dim=0)
