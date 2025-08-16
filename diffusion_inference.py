@@ -9,6 +9,7 @@ import argparse
 # Replace this with your custom model import if needed
 from diffusers import Conv3DAwareUNet, Conv3DAwareUNet2DConditionModel  # or any U-Net class you used
 from diffusion_training import FourierEmbedder
+from timevarying_data_helper import ShadowVolumesMetaDataset
 
 num_freqs = 64
 # number of freqs * 3 coordinates * 2 (sin and cos)
