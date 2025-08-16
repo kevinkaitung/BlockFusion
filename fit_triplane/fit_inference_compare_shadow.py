@@ -48,7 +48,7 @@ def inference(train_dataloader, data_res, chunk_size, value_range, triplane, net
             psnr_list.append((20 * torch.log10(value_range / torch.sqrt(loss))).cpu())
             # import pdb; pdb.set_trace()
             # ssim_list.append(structural_similarity_index_measure(outputs, raw_data, data_range=1.0).item())
-            if batch_idx == timestep_to_store:
+            if batch_idx in timestep_to_store:
                 outputs.detach().cpu().numpy().astype(np.float32).tofile(f"{filename_prefix}_recons_at_timestep_{batch_idx}.bin")
                 raw_data.detach().cpu().numpy().astype(np.float32).tofile(f"raw_volume_at_timestep_{batch_idx}.bin")
     return psnr_list
@@ -57,7 +57,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='base_timevarying.json')
-    parser.add_argument('--timesteps_to_store', type=int, default=50)
+    parser.add_argument('--timesteps_to_store', type=int, nargs='+', default=50)
     parser.add_argument('--result_plot_name', type=str, default="psnr_plot")
     parser.add_argument('--triplane_file_paths', type=str, nargs='+', default="../VAE_Reconstructed_triplane.pt")
     # pre-trained triplane model path: "ch_32_saved_model.ckpt"
@@ -72,7 +72,7 @@ if __name__ == "__main__":
     n_instances = 150
     # data_res = [128, 128, 128]
     data_res = [256, 256, 256]
-    chunk_size = 65536
+    chunk_size = 65536*256
 
     net = Network(
         d_in=config.channel,
