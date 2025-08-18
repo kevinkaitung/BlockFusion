@@ -24,16 +24,6 @@ if parent_dir not in sys.path:
 from visualize_triplane import plot_single_channel
 from timevarying_data_helper import SampleTimevaryingDataset, SampleShadowVolumesDataset
 
-def vis_model(net, triplane, n_labels, savedir, oid=0, rank=0):
-    os.makedirs(savedir, exist_ok=True)
-    for pid in range(n_labels):
-        plot_shape(net, triplane, triplane.R * 2, n_labels, 0.0, os.path.join(savedir, f"triplane.ply"),pid, oid)
-
-
-def save_model(net, triplane, savedir, rank=0):
-    os.makedirs(savedir, exist_ok=True)
-    torch.save(triplane.state_dict(), os.path.join(savedir, f"tripalne.tar"))
-
 
 def create_optimizer(net, triplane, config):
     params_to_train = []
@@ -51,50 +41,6 @@ def update_lr(optimizer, epoch, config):
             param_group['lr'] = config.lr_net * learning_factor
         if "tri" in param_group['name']:
             param_group['lr'] = config.lr_tri * learning_factor
-
-def extract_fields(bound_min, bound_max, resolution, query_func, channel):
-    N = 128 # 64. Change it when memory is insufficient!
-    X = torch.linspace(bound_min[0], bound_max[0], resolution).split(N)
-    Y = torch.linspace(bound_min[1], bound_max[1], resolution).split(N)
-    Z = torch.linspace(bound_min[2], bound_max[2], resolution).split(N)
-
-    u = np.zeros([resolution, resolution, resolution, channel], dtype=np.float32)
-    with torch.no_grad():
-        for xi, xs in enumerate(X):
-            for yi, ys in enumerate(Y):
-                for zi, zs in enumerate(Z):
-                    xx, yy, zz = torch.meshgrid(xs, ys, zs, indexing="ij")
-                    pts = torch.cat([xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)], dim=-1).cuda()
-                    val = query_func(pts).reshape(len(xs), len(ys), len(zs), channel).detach().cpu().numpy()
-                    u[xi * N: xi * N + len(xs), yi * N: yi * N + len(ys), zi * N: zi * N + len(zs)] = val
-    return u
-
-def plot_shape(net, triplane, resolution, channel, threshold, savedir, pid, oid):
-    u = extract_fields(
-        bound_min=[-1.0, -1.0, -1.0],
-        bound_max=[ 1.0,  1.0,  1.0],
-        resolution=resolution,
-        query_func=lambda xyz: -net(triplane(xyz, oid)),
-        channel=channel,
-    )
-    if pid<0:
-        u = np.max(u, -1)  # sdf of scene
-    else:
-        u = u[..., pid]  # sdf of part
-    vertices, triangles = mcubes.marching_cubes(u, threshold)
-    vertices = vertices / (resolution - 1.0) * 2 - 1
-    mesh = trimesh.Trimesh(vertices, triangles)
-    mesh.export(savedir)
-
-def get_triangle_points(obj):
-    obj.compute_triangle_normals()
-    vertices = np.asarray(obj.vertices)
-    triangles = np.asarray(obj.triangles)
-    normals = np.asarray(obj.triangle_normals)
-
-    tri_points = torch.from_numpy(vertices[triangles].mean(1)).float()
-    tri_normals = torch.from_numpy(normals).float()
-    return tri_points, tri_normals
 
 class Triplane(nn.Module):
     def __init__(self,
@@ -438,7 +384,3 @@ if __name__ == "__main__":
                     'lr_tri': final_lr_tri,
                     'epoch': epoch,
                 }, os.path.join(run_dir, f"triplane_model_{epoch}.ckpt"))
-
-    # vis_model(net, triplane, config.n_labels, '.')
-    # save_model(net, triplane, '.')
-
