@@ -118,7 +118,7 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
     
     # Add gradient scaling for mixed precision training
     # But loss would become NaN, so disable it for now
-    scalar = torch.amp.GradScaler("cuda", enabled=False)
+    scalar = torch.cuda.amp.GradScaler(enabled=False)
     min, max = train_dataloader.dataset.get_value_range()
     value_range = max - min
     
@@ -220,10 +220,10 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
             # TODO: need to sperate PSNR evaluation from each volume (cause currently has four volumes in one batch)
             # console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
             if console_logger is not None:
-                console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, MAE loss: {mae_loss.item():0,.6f}, MSE loss: {mse_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, MS-SSIM loss: {ms_ssim_loss.item():0,.6f}, LPIPS loss: {lpips_loss.item():0,.6f}, Geometry loss: {geometry_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(mse_loss_val))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
+                console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, MAE loss: {mae_loss.item():0,.6f}, MSE loss: {mse_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, MS-SSIM loss: {ms_ssim_loss.item():0,.6f}, LPIPS loss: {lpips_loss.item():0,.6f}, Geometry loss: {geometry_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(mse_loss_val))):0,.4f}, LR: {scheduler.optimizer.param_groups[0]['lr']}")
                 # console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
             else:
-                print(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, MAE loss: {mae_loss.item():0,.6f}, MSE loss: {mse_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, MS-SSIM loss: {ms_ssim_loss.item():0,.6f}, LPIPS loss: {lpips_loss.item():0,.6f}, Geometry loss: {geometry_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(mse_loss_val))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
+                print(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, MAE loss: {mae_loss.item():0,.6f}, MSE loss: {mse_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, MS-SSIM loss: {ms_ssim_loss.item():0,.6f}, LPIPS loss: {lpips_loss.item():0,.6f}, Geometry loss: {geometry_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(mse_loss_val))):0,.4f}, LR: {scheduler.optimizer.param_groups[0]['lr']}")
                 # print(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
             # import pdb; pdb.set_trace()
         
@@ -317,7 +317,7 @@ if __name__ == "__main__":
         RuntimeError("Missing resume training directory or model file name to resume training")
     else:
         # create directory for saving logs
-        base_dir = "/home/kctung/logs"
+        base_dir = "./logs"
         os.makedirs(base_dir, exist_ok=True)
         expname_dir = os.path.join(base_dir, args.expname)
         os.makedirs(expname_dir, exist_ok=True)

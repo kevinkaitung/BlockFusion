@@ -104,16 +104,16 @@ def train_diffusion(model, train_dataloader, shadow_meta_dataset, noise_schedule
             steps = epoch * num_batches + batch_idx
             
             if console_logger is not None:
-                console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Step: {steps}, Total loss: {loss.item():0,.6f}, LR: {scheduler.get_last_lr()[0]}")
+                console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Step: {steps}, Total loss: {loss.item():0,.6f}, LR: {scheduler.optimizer.param_groups[0]['lr']}")
             else:
-                print(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, LR: {scheduler.get_last_lr()[0]}")
+                print(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, LR: {scheduler.optimizer.param_groups[0]['lr']}")
         
         # calculate the average loss for the epoch
         assert total_elems == len(train_dataloader.dataset), "total_elems should be equal to the dataset size"
         last_loss = running_loss / total_elems
         if tensorboard_writer is not None:
             tensorboard_writer.add_scalar("Loss/Train", last_loss, epoch)
-            tensorboard_writer.add_scalar("Learning Rate", scheduler.get_last_lr()[0], epoch)
+            tensorboard_writer.add_scalar("Learning Rate", scheduler.optimizer.param_groups[0]['lr'], epoch)
 
         # adjust learning rate
         scheduler.step(last_loss)
