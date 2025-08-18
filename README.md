@@ -10,6 +10,12 @@ And install missing packages:
 pip install --user easydict
 ```
 
+### Setting Environment Variables for using shadow volume sampler:
+```
+export PYTHONPATH=/home/kctung/Projects/instant-vnr-pytorch/bindings/build:$PYTHONPATH
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/kctung/Projects/instant-vnr-pytorch/build_deps/install/lib
+```
+
 ### Stage 1 Training - Triplane Overfitting:
 
 Please go into `./fit_triplane` and follow the instructions.
