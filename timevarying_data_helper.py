@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import glob
 import json
+from pysampler import decode_shadow
 
 class TimevaryingDataset(torch.utils.data.Dataset):
     def __init__(
@@ -279,6 +280,55 @@ class SampleShadowVolumesDataset(torch.utils.data.Dataset):
                 +   (1 - lerp_weights[:,0]) *      lerp_weights[:,1] *       lerp_weights[:,2] * c011
                 +        lerp_weights[:,0] *  (1 - lerp_weights[:,1]) *      lerp_weights[:,2] * c101
                 +        lerp_weights[:,0] *       lerp_weights[:,1] *       lerp_weights[:,2] * c111)
+
+# this function probably transforms normalized value range (0~1) into narrower value range (i.e., 0.05~0.45)
+# so we would only generate the shadow volumes under some specific light directions (not from all directions)
+def param2lightdir(param):
+    if not isinstance(param, np.ndarray):
+        raise ValueError("param must be a numpy.ndarray")
+    theta = (param[..., 0] - 0.5) / 4.0 + 0.50
+    phi   = (param[..., 1] - 0.5) / 2.5 + 0.25
+    return np.stack([theta, phi], axis=-1)
+
+def spherical_to_cartesian_coords(spherical_coords):
+    theta, phi = spherical_coords[..., 0], spherical_coords[..., 1]
+    theta = 2.0 * np.pi * theta
+    phi = 1.0 * np.pi * phi
+    
+    x = 1.0 * np.sin(theta) * np.cos(phi)
+    y = 1.0 * np.sin(theta) * np.sin(phi)
+    z = 1.0 * np.cos(theta)
+    cartesian_coords = np.stack([x, y, z], axis=-1)
+    norms = np.linalg.norm(cartesian_coords, axis=-1, keepdims=True)
+    cartesian_coords = cartesian_coords / norms
+    return cartesian_coords
+
+class RandomlyGenerateLightDir(torch.utils.data.Dataset):
+    def __init__(
+        self, sampler, n_instances, tfn, sample_batch_size=2**10
+    ):
+        self.sampler = sampler
+        self.n_instances = n_instances
+        self.tfn = tfn
+        self.sample_batch_size = sample_batch_size
+        # randomly generate n_instances light dir
+        self.light_dir_spherical = np.random.rand(n_instances, 2)
+        self.light_dir_cartesian = spherical_to_cartesian_coords(self.light_dir_spherical)
+        
+        self.data_min = 0.0
+        self.data_max = 1.0
+        self.value_range = self.data_max - self.data_min
+        
+    def __getitem__(self, index):
+        # generate random coordinates
+        # sample_coords: [x_coords, y_coords, z_coords]
+        sample_coords = torch.rand([self.sample_batch_size, 3], dtype=torch.float32, device="cuda")
+        targets = torch.empty((self.sample_batch_size, 1), dtype=torch.float32, device="cuda")
+        decode_shadow(self.sampler, sample_coords, targets, self.light_dir_spherical[index], self.tfn)
+        return index, sample_coords, targets
+
+    def __len__(self):
+        return self.n_instances
 
 class EncodingWeightDataset(torch.utils.data.Dataset):
     def __init__(
