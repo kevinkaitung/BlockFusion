@@ -88,6 +88,7 @@ else:
             "UNet2DConditionModel",
             "UNet2DModel",
             "Conv3DAwareUNet",
+            "Conv3DAwareUNet2DConditionModel",
             "UNet3DConditionModel",
             "VQModel",
         ]
@@ -448,6 +449,7 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             UNet2DConditionModel,
             UNet2DModel,
             Conv3DAwareUNet,
+            Conv3DAwareUNet2DConditionModel,
             UNet3DConditionModel,
             VQModel,
         )
