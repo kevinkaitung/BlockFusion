@@ -305,15 +305,19 @@ def spherical_to_cartesian_coords(spherical_coords):
 
 class RandomlyGenerateLightDir(torch.utils.data.Dataset):
     def __init__(
-        self, sampler, n_instances, tfn, sample_batch_size=2**10
+        self, sampler, n_instances, tfn, sample_batch_size=2**10, light_dir_spherical=None
     ):
         self.sampler = sampler
         self.n_instances = n_instances
         self.tfn = tfn
         self.sample_batch_size = sample_batch_size
-        # randomly generate n_instances light dir
-        self.light_dir_spherical = np.random.rand(n_instances, 2)
-        self.light_dir_cartesian = spherical_to_cartesian_coords(self.light_dir_spherical)
+        if light_dir_spherical is None:
+            # randomly generate n_instances light dir
+            self.light_dir_spherical = np.random.rand(n_instances, 2)
+            self.light_dir_cartesian = spherical_to_cartesian_coords(self.light_dir_spherical)
+        else:
+            self.light_dir_spherical = np.array(light_dir_spherical)
+            self.light_dir_cartesian = spherical_to_cartesian_coords(self.light_dir_spherical)
         
         self.data_min = 0.0
         self.data_max = 1.0
@@ -329,6 +333,11 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
 
     def __len__(self):
         return self.n_instances
+    
+    def decode_ith_shadow_volume(self, index, sample_coords):
+        targets = torch.empty((sample_coords.shape[0], 1), dtype=torch.float32, device="cuda")
+        decode_shadow(self.sampler, sample_coords, targets, self.light_dir_spherical[index], self.tfn)
+        return index, sample_coords, targets
 
 class EncodingWeightDataset(torch.utils.data.Dataset):
     def __init__(

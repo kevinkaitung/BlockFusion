@@ -11,4 +11,6 @@ loaded_model = torch.load(os.path.join(args.model_dir, args.model_file))
 torch.save({
                 'net_state_dict': loaded_model['net_state_dict'],
                 'triplane_state_dict': loaded_model['triplane_state_dict'],
+                'light_dir_spherical': loaded_model['light_dir_spherical'],
+                'light_dir_cartesian': loaded_model['light_dir_cartesian'],
             }, os.path.join(args.model_dir, f"pure_triplane_model.pt"))
