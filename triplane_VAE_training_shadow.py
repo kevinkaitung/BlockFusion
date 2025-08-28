@@ -273,6 +273,8 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
             outputs = outputs[sort_order]
             torch.save({"weights_latent_space": outputs}, os.path.join(run_dir, f"latent_triplanes_epoch_{epoch}.pt"))
             vae_model.train()
+            del outputs, indices, sorted_indices, sort_order
+            torch.cuda.empty_cache()
         
         # save the model at checkpoint
         if (epoch % ckpt_freq == (ckpt_freq - 1)) or (epoch == (epochs + resume_epoch) - 1):
@@ -305,7 +307,7 @@ if __name__ == "__main__":
                                                 cfg.fpn_decoders_up_idx, cfg.block_config)).cuda()
     
     # n_timesteps = 90
-    n_instances = 150
+    n_instances = 250
     # batch_size = 1
     
     # resume training from ckpt
@@ -472,3 +474,5 @@ if __name__ == "__main__":
     train_vae(vae_model, train_dataloader, optimizer, scheduler, args.epochs, tensorboard_writer, console_logger, run_dir, args.ckpt_freq, resume_epoch,
               args.mae_loss_weight, args.mse_loss_weight, args.ms_ssim_loss_weight, args.lpips_loss_weight, args.kl_loss_weight_values, args.kl_loss_weight_epochs,
               args.geometry_loss_weight, dataset_for_sampling, net, triplane, original_triplane_min, original_triplane_max)
+    
+    print("peak memory usage: allocated:", torch.cuda.memory.max_memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.max_memory_reserved() / 1024**3)

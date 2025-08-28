@@ -3,7 +3,10 @@ import numpy as np
 import torch
 import glob
 import json
-from pysampler import decode_shadow
+try:
+    from pysampler import decode_shadow
+except ImportError:
+    pass
 
 class TimevaryingDataset(torch.utils.data.Dataset):
     def __init__(
