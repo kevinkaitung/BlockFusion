@@ -8,7 +8,7 @@ import os, sys
 import json
 from fit import Triplane, Network
 import matplotlib.pyplot as plt
-from pysampler import create_sampler
+from pysampler import create_sampler, decode_shadow
 
 # Add parent directory to sys.path
 # TODO: make it more flexible to call timevarying_data_helper anywhere
@@ -17,6 +17,19 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 from timevarying_data_helper import ShadowVolumesDataset, RandomlyGenerateLightDir
 
+# for debug
+def only_decode_raw_shadow(sampler, data_res, chunk_size, tfn_file_path, angle=[0.5, 0.5]):
+    targets = []
+    for coord_chunk in generate_coords_chunks(data_res, chunk_size):
+        target = torch.empty([coord_chunk.shape[0], 1]).float().cuda()
+        decode_shadow(sampler, coord_chunk, target, angle, tfn_file_path)
+        targets.append(target)
+    
+    targets = torch.cat(targets, dim=0)
+    
+    # targets.detach().cpu().numpy().astype(np.float32).tofile(f"test_shadow_volume.bin")
+    return targets
+        
 def generate_coords_chunks(data_res, chunk_size, device='cuda'):
     """Yield chunks of coordinates from the full 3D grid."""
     gridz, gridy, gridx = torch.meshgrid(

@@ -294,6 +294,10 @@ if __name__ == "__main__":
         optimizer = create_optimizer(net, triplane, config)
 
     sampler = create_sampler("structuredRegular", "cuda", dims=args.dims, dtype=args.dtype, n_channels=1, filename=args.raw_data_file_path)
+    # For debug
+    # from fit_inference_compare_shadow_randomly_generate import only_decode_raw_shadow
+    # tar = only_decode_raw_shadow(sampler, args.dims, 65536*192, args.tfn_file_path)
+    # import pdb; pdb.set_trace()
 
     # prepare dataset
     train_dataloader = torch.utils.data.DataLoader(
