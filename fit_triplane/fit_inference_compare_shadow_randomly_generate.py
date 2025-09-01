@@ -52,6 +52,9 @@ def inference(dataset, data_res, chunk_size, value_range, triplane, net, instanc
     # from torchmetrics.functional.image import structural_similarity_index_measure
     with torch.no_grad():
         for batch_idx in range(len(dataset)):
+        # hacky way to only evaluate one instance
+        # if True:
+        #     batch_idx = 100
             preds = []
             targets = []
             # print("before generate coords_chunk: allocated:", torch.cuda.memory.memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.memory_reserved() / 1024**3)
@@ -65,8 +68,9 @@ def inference(dataset, data_res, chunk_size, value_range, triplane, net, instanc
             outputs = torch.cat(preds, dim=0)
             targets = torch.cat(targets, dim=0)
             loss = F.mse_loss(outputs, targets)
-            psnr_list.append((20 * torch.log10(value_range / torch.sqrt(loss))).cpu())
-            print("idx:", batch_idx, " psnr:", psnr_list[batch_idx].item())
+            PSNR = (20 * torch.log10(value_range / torch.sqrt(loss))).cpu()
+            psnr_list.append(PSNR)
+            print("idx:", batch_idx, " psnr:", PSNR)
             # ssim_list.append(structural_similarity_index_measure(outputs, raw_data, data_range=1.0).item())
             # print("after loss calculation: allocated:", torch.cuda.memory.memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.memory_reserved() / 1024**3)
             if batch_idx in instances_to_store:
