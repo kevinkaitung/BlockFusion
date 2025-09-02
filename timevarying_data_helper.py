@@ -156,6 +156,20 @@ class ShadowVolumesMetaDataset(torch.utils.data.Dataset):
     def __len__(self):
         return self.n_instances
 
+class ShadowLightingDirectionsDataset(torch.utils.data.Dataset):
+    def __init__(
+        self, lighting_dirs
+    ):
+        self.n_instances = len(lighting_dirs)
+        # lighting_dirs would be 2D python list originally, turn it to torch tensor
+        self.lighting_dirs = torch.tensor(lighting_dirs).cuda()
+    
+    def __getitem__(self, index):
+        return self.lighting_dirs[index]
+
+    def __len__(self):
+        return self.n_instances
+
 class ShadowVolumesDataset(torch.utils.data.Dataset):
     def __init__(
         self, raw_data_dir, raw_data_filename_prefix, file_ext, res, n_instances, n_channels

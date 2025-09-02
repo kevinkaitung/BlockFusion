@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from diffusers import DDPMScheduler, Conv3DAwareUNet, Conv3DAwareUNet2DConditionModel
 import numpy as np
-from timevarying_data_helper import LatentWeightDataset, ShadowVolumesMetaDataset
+from timevarying_data_helper import LatentWeightDataset, ShadowVolumesMetaDataset, ShadowLightingDirectionsDataset
 import os
 import math
 
@@ -23,7 +23,10 @@ def parse_args():
     parser.add_argument("--patience", type=int, default=None, help="Number of patience epochs to decay learning rate")
     parser.add_argument("--resume_training_dir", type=str, default=None, help="Directory to resume training from")
     parser.add_argument("--resume_model_file_name", type=str, default=None, help="Model file name to resume training from")
-    parser.add_argument("--latent_triplanes_file_path", type=str, default=None, help="Directory where latent triplanes are stored")
+    parser.add_argument("--latent_triplanes_file_path", type=str, default=None, help="File Path to latent triplanes")
+    # load pretrained triplane just to get the lighting direction of each instance
+    # TODO: incorporate the lighting direction info into latent triplanes file
+    parser.add_argument("--pretrained_triplane_file_path", type=str, default=None, help="File Path to Pretrained Triplanes Model")
     return parser.parse_args()
 
 # simple embedding for testing
@@ -183,11 +186,14 @@ if __name__ == "__main__":
     dataset = LatentWeightDataset(
         latent_weights,
         [z_shape[0], z_shape[1], z_shape[2] * 3])
-    shadow_meta_dataset = ShadowVolumesMetaDataset(
-        raw_data_dir="/media/storage0/qadwu/projects/hyperinr-data-vis2023/shadowmap/Ring1Light",
-        raw_data_filename_prefix="shadow",
-        file_ext="json",
-        n_instances=len(dataset),
+    # shadow_meta_dataset = ShadowVolumesMetaDataset(
+    #     raw_data_dir=path_to_dataset_directory,
+    #     raw_data_filename_prefix="shadow",
+    #     file_ext="json",
+    #     n_instances=len(dataset),
+    # )
+    shadow_meta_dataset = ShadowLightingDirectionsDataset(
+        lighting_dirs=torch.load(args.pretrained_triplane_file_path)["light_dir_cartesian"]
     )
     # number_embedder = NumberEmbedder(24, embed_dim).cuda()
     positional_embedder = FourierEmbedder(num_freqs=num_freqs).cuda()
