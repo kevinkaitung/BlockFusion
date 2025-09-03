@@ -1,3 +1,5 @@
+# pysampler needs to be imported before create_sampler
+from pysampler import create_sampler
 from tqdm import tqdm
 from easydict import EasyDict as edict
 import argparse
@@ -12,7 +14,9 @@ import torch
 import numpy as np
 import os, sys
 import json
-from pysampler import create_sampler
+
+if torch.cuda.is_available():
+    import tinycudann as tcnn
 
 # Add parent directory to sys.path
 # TODO: make it more flexible to call timevarying_data_helper anywhere
@@ -156,6 +160,40 @@ class Triplane(nn.Module):
         self.R = new_reso
         self.triplane = torch.nn.Parameter(new_tri.view(self.n, 3, self.C, self.R, self.R), requires_grad=True)
 
+class MLP_TCNN(torch.nn.Module):
+    def __init__(self, n_input_dims=3, n_output_dims=1, bias=False,
+                 seed=1337, n_hidden_layers=3, n_neurons=64,
+                 activation="ReLU", output_activation="None",
+                 feedback_alignment=False):
+        super(MLP_TCNN, self).__init__()
+
+        self.n_input_dims  = n_input_dims
+        self.n_output_dims = n_output_dims
+
+        network_config = {
+            "otype": "FullyFusedMLP",
+            "activation": activation,
+            "output_activation": output_activation,
+            "n_neurons": n_neurons,
+            "n_hidden_layers": n_hidden_layers,
+            "feedback_alignment": feedback_alignment
+        }
+
+        self.n_hidden_layers = n_hidden_layers
+        self.n_neurons = n_neurons
+        self.bias = False
+
+        self.network_config = network_config
+
+        assert bias == False, "TCNN MLP doesnot contain bias"
+
+        self.model = tcnn.Network(n_input_dims=self.n_input_dims, 
+                                  n_output_dims=self.n_output_dims, 
+                                  network_config=network_config,
+                                  seed=seed)
+
+    def forward(self, x):
+        return self.model(x)
 
 class Network(nn.Module):
     def __init__(self,
@@ -251,6 +289,9 @@ if __name__ == "__main__":
         console_logger.debug("Resume Training Model Path: " + args.resume_training_model)
     console_logger.debug("Config File Name: " + args.config)
     console_logger.debug("Only finetune mlp: " + str(args.only_finetune_mlp))
+    console_logger.debug("Path to Raw Data File: " + args.raw_data_file_path)
+    console_logger.debug("Path to TFN Data File: " + args.tfn_file_path)
+    console_logger.debug("Number of Instances Generated: " + str(args.n_instances))
 
     # if args.only_finetune_mlp:
     #     console_logger.debug("Only finetune mlp: True")
@@ -262,15 +303,20 @@ if __name__ == "__main__":
     config = edict(config)
     # assert len(config.fixmlp) > 0
 
-    net = Network(
-        d_in=config.channel,
-        d_hid=config.n_hid,
-        n_layers=config.n_layers,
-        d_out=config.n_labels,
-        init_type="geo_init",
-    ).cuda()
-    # net.load_state_dict(torch.load(config.fixmlp, map_location='cuda'))
-
+    # net = Network(
+    #     d_in=config.channel,
+    #     d_hid=config.n_hid,
+    #     n_layers=config.n_layers,
+    #     d_out=config.n_labels,
+    #     init_type="geo_init",
+    # ).cuda()
+    # # net.load_state_dict(torch.load(config.fixmlp, map_location='cuda'))
+    net = MLP_TCNN(n_input_dims=config.channel, n_output_dims=config.n_labels,
+                 n_hidden_layers=config.n_layers, n_neurons=config.n_hid,
+                 activation="ReLU", output_activation="None")
+    
+    # print("check net's parameters()")
+    # import pdb; pdb.set_trace()
     # instantiate multiple triplanes (each timestep has its own triplane)
     triplane = [Triplane(
         reso=config.resolution // (2 ** len(config.c2f_scale)),
@@ -346,13 +392,16 @@ if __name__ == "__main__":
             optimizer = create_optimizer(net, triplane, config)
             update_lr(optimizer, epoch - 1, config)
             torch.cuda.empty_cache()
+            print("peak memory usage: allocated:", torch.cuda.memory.max_memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.max_memory_reserved() / 1024**3)
 
         for batch_idx, data in enumerate(train_dataloader):
             # data format: tuple(timestep_index, sample_coords, target_values)
             outputs = []
             targets = data[2]
             for timestep, sample_coords in zip(data[0], data[1]):
-                outputs.append(net(triplane[timestep](sample_coords, 0)))
+                # the output of TCNN MLP would be half type
+                # convert to float type
+                outputs.append(net(triplane[timestep](sample_coords, 0)).float())
             # outputs[0].shape = [1024, 1]
             outputs = torch.stack(outputs, dim=0)
             # outputs.shape = [90, 1024, 1]
@@ -392,3 +441,4 @@ if __name__ == "__main__":
                     'lr_tri': final_lr_tri,
                     'epoch': epoch,
                 }, os.path.join(run_dir, f"triplane_model_{epoch}.ckpt"))
+    print("peak memory usage: allocated:", torch.cuda.memory.max_memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.max_memory_reserved() / 1024**3)
