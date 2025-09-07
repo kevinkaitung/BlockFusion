@@ -18,6 +18,8 @@ import json
 if torch.cuda.is_available():
     import tinycudann as tcnn
 
+from torch.utils.checkpoint import checkpoint
+
 # Add parent directory to sys.path
 # TODO: make it more flexible to call timevarying_data_helper anywhere
 current_dir = os.path.abspath(os.path.dirname(__file__))
@@ -30,13 +32,18 @@ from visualize_triplane import plot_single_channel
 from timevarying_data_helper import SampleShadowVolumesDataset, RandomlyGenerateLightDir
 
 
-def create_optimizer(net, triplane, config):
+def create_optimizer(net, triplane, config, optimizer_type):
     params_to_train = []
     if net is not None:
         params_to_train += [{'name':'net', 'params':net.parameters(), 'lr':config.lr_net}]
     if triplane is not None:
         params_to_train += [{'name':'tri', 'params':triplane.parameters(), 'lr':config.lr_tri}]
-    return torch.optim.Adam(params_to_train)
+    if optimizer_type == "Adam":
+        return torch.optim.Adam(params_to_train)
+    elif optimizer_type == "SGD":
+        return torch.optim.SGD(params_to_train)
+    else:
+        raise RuntimeError(f"{optimizer_type} optimizer not supported!")
 
 def update_lr(optimizer, epoch, config):
     # TODO: make sure the lr for finetuning is reasonable
@@ -253,6 +260,7 @@ if __name__ == "__main__":
     parser.add_argument("--description", type=str, default="", help="Description to experiment")
     parser.add_argument('--resume_training_model', type=str, default=None)
     parser.add_argument('--only_finetune_mlp', action='store_true')
+    parser.add_argument('--optimizer_type', type=str, default="Adam")
     
     parser.add_argument('--dims', type=int, nargs=3, default=[256, 256, 256])
     parser.add_argument('--dtype', type=str, default='float32')
@@ -332,12 +340,13 @@ if __name__ == "__main__":
         net.load_state_dict(loaded_model['net_state_dict'])
         triplane.load_state_dict(loaded_model['triplane_state_dict'])
         # TODO: make sure whether I should use optimizer from pretrained triplane?
+        # Caution: also need to pass optimizer_type for resuming training from ckpt
         if args.only_finetune_mlp:
-            optimizer = create_optimizer(net, None, config)
+            optimizer = create_optimizer(net, None, config, args.optimizer_type)
         else:
-            optimizer = create_optimizer(net, triplane, config)
+            optimizer = create_optimizer(net, triplane, config, args.optimizer_type)
     else:
-        optimizer = create_optimizer(net, triplane, config)
+        optimizer = create_optimizer(net, triplane, config, args.optimizer_type)
 
     sampler = create_sampler("structuredRegular", "cuda", dims=args.dims, dtype=args.dtype, n_channels=1, filename=args.raw_data_file_path)
     # For debug
@@ -389,12 +398,18 @@ if __name__ == "__main__":
                 )
             for tri in triplane:
                 tri.update_resolution(new_reso)
-            optimizer = create_optimizer(net, triplane, config)
+            optimizer = create_optimizer(net, triplane, config, args.optimizer_type)
             update_lr(optimizer, epoch - 1, config)
             torch.cuda.empty_cache()
-            print("peak memory usage: allocated:", torch.cuda.memory.max_memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.max_memory_reserved() / 1024**3)
+            console_logger.debug(f"Peak memory usage at epoch {epoch}: allocated: {torch.cuda.memory.max_memory_allocated() / 1024**3} reserved: {torch.cuda.memory.max_memory_reserved() / 1024**3}")
 
         for batch_idx, data in enumerate(train_dataloader):
+            
+            # for debug
+            # start_mem = torch.cuda.memory_allocated()
+            # start_rsv = torch.cuda.memory_reserved()
+            # print(f"start mem: {start_mem / 1024**3:.2f} GB / rsv: {start_rsv / 1024**3:.2f} GB")
+            
             # data format: tuple(timestep_index, sample_coords, target_values)
             outputs = []
             targets = data[2]
@@ -402,17 +417,34 @@ if __name__ == "__main__":
                 # the output of TCNN MLP would be half type
                 # convert to float type
                 outputs.append(net(triplane[timestep](sample_coords, 0)).float())
+                # # Use checkpoint to trade compute for memory
+                # def checkpoint_fn(coords):
+                #     encoded = triplane[timestep](coords, 0)
+                #     return net(encoded)
+                # # Checkpoint saves memory by not storing intermediate activations
+                # output = checkpoint(checkpoint_fn, sample_coords, use_reentrant=False)
+                # outputs.append(output)
+            
             # outputs[0].shape = [1024, 1]
             outputs = torch.stack(outputs, dim=0)
             # outputs.shape = [90, 1024, 1]
             # targets.shape = [90, 1024, 1]
             loss = F.mse_loss(outputs, targets)
-            
+
+            # deleting targets and outputs might not clean up much memory
+            # most of the memory might be consumed by the intermediate results of forward pass
+            del targets, outputs
+            torch.cuda.empty_cache()
             optimizer.zero_grad()
+            # print(f"Before backward Mem Alloc: {torch.cuda.memory_allocated() / 1024**3:.2f} GB / Reserved: {torch.cuda.memory_reserved() / 1024**3:.2f} GB / Max Alloc: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB / Max Reserved: {torch.cuda.max_memory_reserved() / 1024**3:.2f} GB")
             loss.backward()
+            # print(f"Before step Mem Alloc: {torch.cuda.memory_allocated() / 1024**3:.2f} GB / Reserved: {torch.cuda.memory_reserved() / 1024**3:.2f} GB / Max Alloc: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB / Max Reserved: {torch.cuda.max_memory_reserved() / 1024**3:.2f} GB")
             optimizer.step()
+            # print(f"After step Mem Alloc: {torch.cuda.memory_allocated() / 1024**3:.2f} GB / Reserved: {torch.cuda.memory_reserved() / 1024**3:.2f} GB / Max Alloc: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB / Max Reserved: {torch.cuda.max_memory_reserved() / 1024**3:.2f} GB")
             
-            running_loss += loss
+            running_loss += loss.detach()
+            del loss
+            torch.cuda.empty_cache()
             
         avg_loss = running_loss / len(train_dataloader)
         loss_list.append(avg_loss)
@@ -441,4 +473,4 @@ if __name__ == "__main__":
                     'lr_tri': final_lr_tri,
                     'epoch': epoch,
                 }, os.path.join(run_dir, f"triplane_model_{epoch}.ckpt"))
-    print("peak memory usage: allocated:", torch.cuda.memory.max_memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.max_memory_reserved() / 1024**3)
+    console_logger.debug(f"Peak memory usage: allocated: {torch.cuda.memory.max_memory_allocated() / 1024**3} reserved: {torch.cuda.memory.max_memory_reserved() / 1024**3}")
