@@ -307,18 +307,56 @@ def param2lightdir(param):
     phi   = (param[..., 1] - 0.5) / 2.5 + 0.25
     return np.stack([theta, phi], axis=-1)
 
+# double check the correctness
+# def spherical_to_cartesian_coords(spherical_coords):
+#     theta, phi = spherical_coords[..., 0], spherical_coords[..., 1]
+#     theta = 2.0 * np.pi * theta
+#     phi = 1.0 * np.pi * phi
+    
+#     x = 1.0 * np.sin(theta) * np.cos(phi)
+#     y = 1.0 * np.sin(theta) * np.sin(phi)
+#     z = 1.0 * np.cos(theta)
+#     cartesian_coords = np.stack([x, y, z], axis=-1)
+#     norms = np.linalg.norm(cartesian_coords, axis=-1, keepdims=True)
+#     cartesian_coords = cartesian_coords / norms
+#     return cartesian_coords
+
 def spherical_to_cartesian_coords(spherical_coords):
     theta, phi = spherical_coords[..., 0], spherical_coords[..., 1]
-    theta = 2.0 * np.pi * theta
-    phi = 1.0 * np.pi * phi
-    
-    x = 1.0 * np.sin(theta) * np.cos(phi)
-    y = 1.0 * np.sin(theta) * np.sin(phi)
-    z = 1.0 * np.cos(theta)
-    cartesian_coords = np.stack([x, y, z], axis=-1)
-    norms = np.linalg.norm(cartesian_coords, axis=-1, keepdims=True)
-    cartesian_coords = cartesian_coords / norms
-    return cartesian_coords
+    x = np.sin(phi) * np.cos(theta)
+    y = np.sin(phi) * np.sin(theta)
+    z = np.cos(phi)
+    return np.stack([x, y, z], axis=-1)
+
+def cartesian_to_spherical_coords(cartesian_coords):
+    x, y, z = cartesian_coords[..., 0], cartesian_coords[..., 1], cartesian_coords[..., 2]
+    r = np.linalg.norm(cartesian_coords, axis=-1)
+    theta = np.arctan2(y, x)             # azimuth
+    phi = np.arccos(z / r)               # polar
+    return np.stack([theta, phi], axis=-1)
+
+# generate lighting directions based on fibonacci sphere
+def fibonacci_sphere(samples=1000, randomize=True):
+    rnd = 1.
+    if randomize:
+        rnd = np.random.random() * samples
+
+    points = []
+    offset = 2.0 / samples
+    increment = np.pi * (3.0 - np.sqrt(5.0))  # golden angle
+
+    for i in range(samples):
+        y = ((i * offset) - 1) + (offset / 2)
+        r = np.sqrt(1 - y * y)
+
+        phi = ((i + rnd) % samples) * increment
+
+        x = np.cos(phi) * r
+        z = np.sin(phi) * r
+
+        points.append([x, y, z])
+
+    return np.array(points)
 
 class RandomlyGenerateLightDir(torch.utils.data.Dataset):
     def __init__(
@@ -330,8 +368,9 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
         self.sample_batch_size = sample_batch_size
         if light_dir_spherical is None:
             # randomly generate n_instances light dir
-            self.light_dir_spherical = np.random.rand(n_instances, 2)
-            self.light_dir_cartesian = spherical_to_cartesian_coords(self.light_dir_spherical)
+            # self.light_dir_spherical = np.random.rand(n_instances, 2)
+            self.light_dir_cartesian = fibonacci_sphere(n_instances)
+            self.light_dir_spherical = cartesian_to_spherical_coords(self.light_dir_cartesian)
         else:
             self.light_dir_spherical = np.array(light_dir_spherical)
             self.light_dir_cartesian = spherical_to_cartesian_coords(self.light_dir_spherical)
