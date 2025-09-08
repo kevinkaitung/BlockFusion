@@ -261,6 +261,7 @@ if __name__ == "__main__":
     parser.add_argument('--resume_training_model', type=str, default=None)
     parser.add_argument('--only_finetune_mlp', action='store_true')
     parser.add_argument('--optimizer_type', type=str, default="Adam")
+    parser.add_argument('--use_native_mlp', action='store_true')
     
     parser.add_argument('--dims', type=int, nargs=3, default=[256, 256, 256])
     parser.add_argument('--dtype', type=str, default='float32')
@@ -297,6 +298,8 @@ if __name__ == "__main__":
         console_logger.debug("Resume Training Model Path: " + args.resume_training_model)
     console_logger.debug("Config File Name: " + args.config)
     console_logger.debug("Only finetune mlp: " + str(args.only_finetune_mlp))
+    console_logger.debug("Optimizer Type: " + args.optimizer_type)
+    console_logger.debug("Use Native MLP: " + str(args.use_native_mlp))
     console_logger.debug("Path to Raw Data File: " + args.raw_data_file_path)
     console_logger.debug("Path to TFN Data File: " + args.tfn_file_path)
     console_logger.debug("Number of Instances Generated: " + str(args.n_instances))
@@ -311,17 +314,19 @@ if __name__ == "__main__":
     config = edict(config)
     # assert len(config.fixmlp) > 0
 
-    # net = Network(
-    #     d_in=config.channel,
-    #     d_hid=config.n_hid,
-    #     n_layers=config.n_layers,
-    #     d_out=config.n_labels,
-    #     init_type="geo_init",
-    # ).cuda()
-    # # net.load_state_dict(torch.load(config.fixmlp, map_location='cuda'))
-    net = MLP_TCNN(n_input_dims=config.channel, n_output_dims=config.n_labels,
-                 n_hidden_layers=config.n_layers, n_neurons=config.n_hid,
-                 activation="ReLU", output_activation="None")
+    if args.use_native_mlp:
+        net = Network(
+            d_in=config.channel,
+            d_hid=config.n_hid,
+            n_layers=config.n_layers,
+            d_out=config.n_labels,
+            init_type="geo_init",
+        ).cuda()
+        # net.load_state_dict(torch.load(config.fixmlp, map_location='cuda'))
+    else:
+        net = MLP_TCNN(n_input_dims=config.channel, n_output_dims=config.n_labels,
+                    n_hidden_layers=config.n_layers, n_neurons=config.n_hid,
+                    activation="ReLU", output_activation="None")
     
     # print("check net's parameters()")
     # import pdb; pdb.set_trace()
