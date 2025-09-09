@@ -307,7 +307,7 @@ if __name__ == "__main__":
                                                 cfg.fpn_decoders_up_idx, cfg.block_config)).cuda()
     
     # n_timesteps = 90
-    n_instances = 250
+    # n_instances = 250
     # batch_size = 1
     
     # resume training from ckpt
@@ -343,8 +343,14 @@ if __name__ == "__main__":
 
     # load pretrained tri-plane here
     loaded_model = torch.load(args.pretrained_triplane_file_path)
+    keys = loaded_model['triplane_state_dict'].keys()
+    n_instances = sum(1 for k in keys if k.endswith("triplane"))
     triplane_weights = [loaded_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_instances)]
     triplane_weights = torch.cat(triplane_weights, dim=0)
+    
+    # clean to save more space
+    del loaded_model
+    torch.cuda.empty_cache()
     
     # normalize triplane value to -1, 1
     # normalization for training only one volume
