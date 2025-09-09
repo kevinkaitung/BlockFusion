@@ -4,7 +4,7 @@
     "max_iters": 10000,
     "lr_net": 1e-3,
     "lr_tri": 1e-3,
-    "batch_size": 250,
+    "batch_size": 500,
 
     "w_eik":2.0,
     "w_nor":5.0,
