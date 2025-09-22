@@ -1,3 +1,4 @@
+from pysampler import create_sampler, decode_shadow
 from easydict import EasyDict as edict
 import argparse
 from torch import nn
@@ -7,15 +8,16 @@ import numpy as np
 import os, sys
 import json
 from fit import Triplane, Network
+from fit_shadow_randomly_generate import MLP_TCNN
 import matplotlib.pyplot as plt
-from pysampler import create_sampler, decode_shadow
+from tqdm import tqdm
 
 # Add parent directory to sys.path
 # TODO: make it more flexible to call timevarying_data_helper anywhere
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
-from timevarying_data_helper import ShadowVolumesDataset, RandomlyGenerateLightDir
+from timevarying_data_helper import ShadowVolumesDataset, RandomlyGenerateLightDir, cartesian_to_spherical_coords, spherical_to_cartesian_coords
 
 # for debug
 def only_decode_raw_shadow(sampler, data_res, chunk_size, tfn_file_path, angle=[0.5, 0.5]):
@@ -51,34 +53,48 @@ def inference(dataset, data_res, chunk_size, value_range, triplane, net, instanc
     ssim_list = []
     # from torchmetrics.functional.image import structural_similarity_index_measure
     with torch.no_grad():
-        for batch_idx in range(len(dataset)):
+        for batch_idx in tqdm(range(len(dataset))):
         # hacky way to only evaluate one instance
         # if True:
         #     batch_idx = 100
-            preds = []
-            targets = []
+            # preds = []
+            # targets = []
             # print("before generate coords_chunk: allocated:", torch.cuda.memory.memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.memory_reserved() / 1024**3)
+            total_sq_error = 0.0
+            total_count = 0
+            this_batch_triplane = triplane[batch_idx].cuda()
             for coord_chunk in generate_coords_chunks(data_res, chunk_size):
                 # print(f"{batch_idx}:before allocated:", torch.cuda.memory.memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.memory_reserved() / 1024**3)
-                preds.append(net(triplane[batch_idx](coord_chunk, 0)))
-                targets.append(dataset.decode_ith_shadow_volume(batch_idx, coord_chunk)[2])
+                # preds.append(net(this_batch_triplane(coord_chunk, 0)))
+                # targets.append(dataset.decode_ith_shadow_volume(batch_idx, coord_chunk)[2])
+                preds = net(this_batch_triplane(coord_chunk, 0))
+                targets = dataset.decode_ith_shadow_volume(batch_idx, coord_chunk)[2]
+                # sum of squared errors for this chunk
+                sq_error = F.mse_loss(preds, targets, reduction="sum")
+                total_sq_error += sq_error.item()
+                total_count += targets.numel()
+                
                 # print(f"{batch_idx}:after allocated:", torch.cuda.memory.memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.memory_reserved() / 1024**3)
             # outputs = net(triplane[batch_idx](coords, 0))
             # outputs = outputs.view(raw_data.shape)
-            outputs = torch.cat(preds, dim=0)
-            targets = torch.cat(targets, dim=0)
-            loss = F.mse_loss(outputs, targets)
-            PSNR = (20 * torch.log10(value_range / torch.sqrt(loss))).cpu()
+            loss = total_sq_error / total_count
+            
+            this_batch_triplane = this_batch_triplane.cpu()
+            # outputs = torch.cat(preds, dim=0)
+            # targets = torch.cat(targets, dim=0)
+            # loss = F.mse_loss(outputs, targets)
+            # PSNR = (20 * torch.log10(value_range / torch.sqrt(loss))).cpu()
+            PSNR = (20 * np.log10(value_range / np.sqrt(loss)))
             psnr_list.append(PSNR)
-            print("idx:", batch_idx, " psnr:", PSNR)
+            print(f"idx:{batch_idx} psnr:{PSNR}")
             # ssim_list.append(structural_similarity_index_measure(outputs, raw_data, data_range=1.0).item())
             # print("after loss calculation: allocated:", torch.cuda.memory.memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.memory_reserved() / 1024**3)
-            if batch_idx in instances_to_store:
-                outputs.detach().cpu().numpy().astype(np.float32).tofile(f"{filename_prefix}_recons_at_instance_{batch_idx}.bin")
-                targets.detach().cpu().numpy().astype(np.float32).tofile(f"raw_volume_at_instance_{batch_idx}.bin")
+            # if batch_idx in instances_to_store:
+            #     outputs.detach().cpu().numpy().astype(np.float32).tofile(f"{filename_prefix}_recons_at_instance_{batch_idx}.bin")
+            #     targets.detach().cpu().numpy().astype(np.float32).tofile(f"raw_volume_at_instance_{batch_idx}.bin")
             # save the GPU memory 
-            del outputs, targets, loss
-            torch.cuda.empty_cache()
+            # del outputs, targets, loss
+            # torch.cuda.empty_cache()
             # print("after deleting: allocated:", torch.cuda.memory.memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.memory_reserved() / 1024**3)
     return psnr_list
 
@@ -109,13 +125,17 @@ if __name__ == "__main__":
     data_res = args.dims
     chunk_size = 65536*192
 
-    net = Network(
-        d_in=config.channel,
-        d_hid=config.n_hid,
-        n_layers=config.n_layers,
-        d_out=config.n_labels,
-        init_type="geo_init",
-    ).cuda()
+    # net = Network(
+    #     d_in=config.channel,
+    #     d_hid=config.n_hid,
+    #     n_layers=config.n_layers,
+    #     d_out=config.n_labels,
+    #     init_type="geo_init",
+    # ).cuda()
+    
+    net = MLP_TCNN(n_input_dims=config.channel, n_output_dims=config.n_labels,
+                n_hidden_layers=config.n_layers, n_neurons=config.n_hid,
+                activation="ReLU", output_activation="None")
 
     # instantiate multiple triplanes (each instance has its own triplane)
     triplane = [Triplane(
@@ -123,7 +143,7 @@ if __name__ == "__main__":
         channel=config.channel,
         init_type="geo_init",
         objname=None,
-    ).cuda() for _ in range(n_instances)]
+    ) for _ in range(n_instances)]
     triplane = nn.ModuleList(triplane)
     
     sampler = create_sampler("structuredRegular", "cuda", dims=args.dims, dtype=args.dtype, n_channels=1, filename=args.raw_data_file_path)
@@ -132,19 +152,42 @@ if __name__ == "__main__":
     # just use the first triplane to load light directions
     # should compare all sets of triplanes that have the same light direction set
     loaded_model = torch.load(args.triplane_file_paths[0])
+    # TODO: think of how to compare
+    assert args.n_instances == len(loaded_model['light_dir_cartesian'])
+    
+    # ### section of hacky way to temporarily bypass the problem (not used anymore)
+    # spherical_coords = cartesian_to_spherical_coords(np.array(loaded_model['light_dir_cartesian']))
+    # print(f"{1}: {spherical_coords.shape}")
+    # theta=spherical_coords[:,0].astype(float)
+    # phi=spherical_coords[:,1].astype(float)
+    # print(f"{2}: {theta.shape}, {phi.shape}")
+    
+    # theta=theta*np.pi
+    # phi=phi*2.0*np.pi
+    # print(f"{3}: {np.stack([theta, phi], axis=-1).shape}")
+    # temp = spherical_to_cartesian_coords(np.stack([theta, phi], axis=-1))
+    # print(f"{4}: {temp.shape}")
+    # temp1 = cartesian_to_spherical_coords(temp)
+    # print(f"{5}: {temp1.shape}")
+    # corrected_spherical_coords = np.stack([(temp1[:,0] % 2*np.pi)/(2*np.pi), temp1[:,1]/np.pi], axis=-1)
+    # print(f"{6}: {corrected_spherical_coords.shape}")
+    # ### section end
+    
     # prepare dataset for evaluation
     dataset = RandomlyGenerateLightDir(
         sampler=sampler,
         n_instances=args.n_instances,
         tfn=args.tfn_file_path,
         sample_batch_size=config.sample_batch_size,
-        light_dir_spherical=loaded_model['light_dir_spherical']
+        light_dir_spherical=cartesian_to_spherical_coords(np.array(loaded_model['light_dir_cartesian'])).tolist()
+        # light_dir_spherical=loaded_model['light_dir_spherical']
+        # light_dir_spherical=corrected_spherical_coords.tolist()
     )
     value_range = dataset.value_range
     
     psnr_lists = []
     for triplane_file_path, recon_type in zip(args.triplane_file_paths, args.triplane_recon_types):
-        loaded_model = torch.load(triplane_file_path)
+        loaded_model = torch.load(triplane_file_path, map_location="cpu")
 
         net.load_state_dict(loaded_model['net_state_dict'])
         triplane.load_state_dict(loaded_model['triplane_state_dict'])
@@ -160,7 +203,7 @@ if __name__ == "__main__":
     # After the PSNR printing loop, add:
     plt.figure(figsize=(10, 6))
     for idx in range(len(psnr_lists)):
-        plt.plot(range(len(psnr_lists[idx])), psnr_lists[idx], label=f'{args.triplane_recon_types[idx]} PSNR (avg: {torch.mean(torch.stack(psnr_lists[idx])):0,.4f})')
+        plt.plot(range(len(psnr_lists[idx])), psnr_lists[idx], label=f'{args.triplane_recon_types[idx]} PSNR (avg: {np.mean(np.stack(psnr_lists[idx])):0,.4f})')
     plt.xlabel('Instance')
     plt.ylabel('PSNR (dB)')
     plt.title('PSNR across Instances')
