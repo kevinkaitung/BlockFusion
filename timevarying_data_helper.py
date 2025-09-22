@@ -169,6 +169,9 @@ class ShadowLightingDirectionsDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return self.n_instances
+    
+    def get_all_light_dirs_list(self):
+        return self.lighting_dirs.tolist()
 
 class ShadowVolumesDataset(torch.utils.data.Dataset):
     def __init__(

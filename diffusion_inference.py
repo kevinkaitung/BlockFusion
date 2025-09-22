@@ -42,9 +42,11 @@ def parse_args():
     parser.add_argument("--model_file_name", type=str, default="vae_model_epoch_9999.ckpt", help="Model file name")
     parser.add_argument("--latent_triplanes_file_path", type=str, default="logs/triplane_AE_model_a/20250619-000758", help="Directory where latent triplanes are stored")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size of generated samples")
+    # only specify one of args to generate the triplanes either conditioned by the light directions from original triplanes or from randomly generated
     # load pretrained triplane just to get the lighting direction of each instance
-    # TODO: incorporate the lighting direction info into latent triplanes file
     parser.add_argument("--pretrained_triplane_file_path", type=str, default=None, help="File Path to Pretrained Triplanes Model")
+    # for evaluation on the results conditioned by randomly generated lights
+    parser.add_argument("--n_randomly_generated_lights", type=int, default=None, help="Number of randomly generated lights")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -92,10 +94,22 @@ if __name__ == "__main__":
     #     file_ext="json",
     #     n_instances=latent_triplanes.shape[0],
     # )
-    shadow_meta_dataset = ShadowLightingDirectionsDataset(
-        lighting_dirs=torch.load(args.pretrained_triplane_file_path)["light_dir_cartesian"]
-    )
-
+    if args.pretrained_triplane_file_path:
+        # use the lighting directions from original dataset
+        shadow_meta_dataset = ShadowLightingDirectionsDataset(
+            lighting_dirs=torch.load(args.pretrained_triplane_file_path)["light_dir_cartesian"]
+        )
+    elif args.n_randomly_generated_lights:
+        # randomly generate lighting directions in cartesian space
+        shadow_meta_dataset = ShadowLightingDirectionsDataset(
+            lighting_dirs=np.random.rand(args.n_randomly_generated_lights, 3)
+        )
+    else:
+        raise RuntimeError("Need to specify one of the args: args.pretrained_triplane_file_path or args.n_randomly_generated_lights")
+    inference_dataloader = torch.utils.data.DataLoader(shadow_meta_dataset,
+        batch_size=args.batch_size,
+        shuffle=False)
+    
     # Setup scheduler (should match the one used in training)
     scheduler = DDPMScheduler(num_train_timesteps=257)
     scheduler.set_timesteps(200)  # Can reduce for faster inference
@@ -103,25 +117,32 @@ if __name__ == "__main__":
     # --- Step 2: Generate Gaussian noise as initial input ---
     # image_size = (32, 128, 128 * 3)  # Replace with your output shape
     image_size = (plane_shape[1], plane_shape[2], plane_shape[3] * plane_shape[0])
-    noise = torch.randn((args.batch_size, *image_size)).cuda()
+    outputs = []
+    for batch_idx, light_directions in enumerate(inference_dataloader):
+        print(f"batch: {batch_idx}")
+        noise = torch.randn((light_directions.shape[0], *image_size)).cuda()
 
-    pos_embed = positional_embedder(shadow_meta_dataset[100:100+args.batch_size])
-    # This is for evaluting the diffusion-generated shadow under randomly-generated lighting direction
-    # randomly_generated_lightdir = np.random.rand(1, 2)
-    # pos_embed = positional_embedder(torch.tensor(spherical_to_cartesian_coords(randomly_generated_lightdir)).cuda().float())
-    # make the shape to be [batch_size, sequence_length (currently one for representing one light), feature_dim]
-    pos_embed = pos_embed[0].unsqueeze(1)
-    # --- Step 3: Perform reverse diffusion process ---
-    with torch.no_grad():
-        for t in scheduler.timesteps:
-            noise_input = noise
-            model_output = model(noise_input, t, pos_embed).sample
-            noise = scheduler.step(model_output, t, noise)["prev_sample"]
-    # only permute for raw triplanes
-    # noise = noise.view(1, plane_shape[1], plane_shape[2], 3, plane_shape[3]).permute(0, 3, 1, 2, 4)
-    # denormalize from -1~1 to its original (latent_triplanes) value range
-    noise = (noise - (-1)) / 2.0 * (latent_triplanes.max() - latent_triplanes.min()) + latent_triplanes.min()
-    torch.save({"weights_latent_space": noise}, os.path.join(args.expdir, "diffusion_latent_triplanes.pt"))
+        pos_embed = positional_embedder(light_directions).cuda().float()
+        # This is for evaluting the diffusion-generated shadow under randomly-generated lighting direction
+        # randomly_generated_lightdir = np.random.rand(1, 2)
+        # pos_embed = positional_embedder(torch.tensor(spherical_to_cartesian_coords(randomly_generated_lightdir)).cuda().float())
+        # make the shape to be [batch_size, sequence_length (currently one for representing one light), feature_dim]
+        pos_embed = pos_embed[0].unsqueeze(1)
+        # --- Step 3: Perform reverse diffusion process ---
+        with torch.no_grad():
+            for t in scheduler.timesteps:
+                noise_input = noise
+                model_output = model(noise_input, t, pos_embed).sample
+                noise = scheduler.step(model_output, t, noise)["prev_sample"]
+        # only permute for raw triplanes
+        # noise = noise.view(1, plane_shape[1], plane_shape[2], 3, plane_shape[3]).permute(0, 3, 1, 2, 4)
+        # denormalize from -1~1 to its original (latent_triplanes) value range
+        noise = (noise - (-1)) / 2.0 * (latent_triplanes.max() - latent_triplanes.min()) + latent_triplanes.min()
+        outputs.append(noise)
+    outputs = torch.cat(outputs, dim=0)
+    
+    torch.save({"weights_latent_space": outputs,
+                "light_dir_cartesian": shadow_meta_dataset.get_all_light_dirs_list()}, os.path.join(args.expdir, "diffusion_latent_triplanes.pt"))
 
     # This is for raw triplane diffusion inference
     # # TODO: replace len(pretrained_triplane_model['triplane_state_dict'])//2 with actual n_timesteps
