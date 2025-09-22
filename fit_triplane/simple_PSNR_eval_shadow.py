@@ -35,6 +35,7 @@ def inference(n_instances, data_res, chunk_size, value_range, triplane, net, lig
             for coord_chunk in generate_coords_chunks(data_res, chunk_size):
                 preds.append(net(triplane[batch_idx](coord_chunk, 0)))
                 target = torch.empty([coord_chunk.shape[0], 1]).float().cuda()
+                # TODO: need to convert light dir from radiance to normalized value (0~1)
                 decode_shadow(sampler, coord_chunk, target, light_dirs[batch_idx], tfn_file_path)
                 targets.append(target)
             # outputs = net(triplane[batch_idx](coords, 0))
