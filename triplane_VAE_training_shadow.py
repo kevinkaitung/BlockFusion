@@ -3,6 +3,9 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+
 import logging
 import argparse
 from datetime import datetime
@@ -108,8 +111,16 @@ def load_params_to_triplane(triplane_models, triplane_params, original_min, orig
         with torch.no_grad():
             triplane_models[i].triplane.copy_(triplane_params[i:i+1])
 
+def reduce_tensor(tensor, average=True):
+    """All-reduce a single scalar tensor across all ranks."""
+    if dist.is_available() and dist.is_initialized():
+        dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+        if average:
+            tensor /= dist.get_world_size()
+    return tensor
+
 # redefinition of traning pipeline for multiple input volumes
-def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100, 
+def train_vae(vae_model, train_dataloader, distributed_sampler, optimizer, scheduler, epochs=100, 
               tensorboard_writer=None, console_logger=None, run_dir=None, ckpt_freq=100, resume_epoch=0,
               mae_loss_weight=1.0, mse_loss_weight=1.0, ms_ssim_loss_weight=0.1, lpips_loss_weight=1.0, kl_loss_weight_values=[0.00001], kl_loss_weight_epochs=[0],
               geometry_loss_weight=0.35, dataset_for_sampling=None, net=None, triplane=None, original_triplane_min=0.0, original_triplane_max=1.0):
@@ -127,7 +138,8 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
     current_kl_loss_weight_epochs_idx += 1
     
     # TODO: check whether the param is appropriate (i.e., betas)
-    ms_ssim = MultiScaleStructuralSimilarityIndexMeasure(kernel_size = 11, betas = (0.8,0.6),data_range=value_range).cuda()
+    # TODO: might need to tweak ms ssim to support DDP later (Pytorch Lightning should support it)
+    ms_ssim = MultiScaleStructuralSimilarityIndexMeasure(kernel_size = 11, betas = (0.8,0.6),data_range=value_range).to(device_id)
     # lpips = LearnedPerceptualImagePatchSimilarity(net_type='squeeze').cuda()
     
     for epoch in range(epochs):
@@ -136,6 +148,9 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
             sample_coords, target_values = regenerate_sampled_points(dataset_for_sampling)
         
         epoch = epoch + resume_epoch
+        
+        # for DDP
+        distributed_sampler.set_epoch(epoch)
         
         running_mae_loss = 0.0
         running_mse_loss = 0.0
@@ -158,6 +173,8 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
         # since we do optimization after each batch
         for batch_idx, raw_data in enumerate(train_dataloader):
             
+            # place each batch at its corresponding rank
+            raw_data[0] = raw_data[0].to(device_id)
             # Add gradient scaling for mixed precision training
             # But loss would become NaN, so disable it for now
             with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=False):
@@ -180,24 +197,25 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
                 # reconstructed results is the first element of the output (output[0])
                 mae_loss = mae_loss_weight * F.l1_loss(output[0], raw_data[0])
                 mse_loss = F.mse_loss(output[0], raw_data[0])
-                mse_loss_val = mse_loss.item()
+                mse_loss_for_PSNR = mse_loss
                 mse_loss = mse_loss_weight * mse_loss
                 kl_loss = kl_loss_weight * vae_model.module.loss_function(*output)
                 ms_ssim_loss = ms_ssim_loss_weight * (1 - ms_ssim(output[0], raw_data[0]))
                 # lpips_loss = lpips_loss_weight * lpips(output[0].reshape([-1, 1, output[0].shape[3], output[0].shape[4]]).repeat(1, 3, 1, 1), raw_data[0].reshape([-1, 1, raw_data[0].shape[3], raw_data[0].shape[4]]).repeat(1, 3, 1, 1))
                 # lpips_loss = lpips_loss_weight * lpips(output[0].reshape([-1, 1, output[0].shape[3], output[0].shape[4]]).expand(-1, 3, -1, -1), raw_data[0].reshape([-1, 1, raw_data[0].shape[3], raw_data[0].shape[4]]).expand(-1, 3, -1, -1))
-                lpips_loss = torch.tensor(0).cuda()
+                lpips_loss = torch.tensor(0).to(device_id)
                 # load VAE-reconstructed triplanes into triplane models
                 # if (epoch % ckpt_freq == (ckpt_freq - 1)) or (epoch == (epochs + resume_epoch) - 1):
                 #     debug = True
                 # else:
                 #     debug = False
+                # TODO: need to tweak to support DPP later
                 debug = False
                 if geometry_loss_weight != 0.0:
                     load_params_to_triplane(triplane, output[0], original_triplane_min, original_triplane_max, min, max)
                     geometry_loss = geometry_loss_weight * calculate_geometry_loss(net, triplane, raw_data[1], sample_coords, target_values, debug)
                 else:
-                    geometry_loss = torch.tensor(0).cuda()
+                    geometry_loss = torch.tensor(0).to(device_id)
                 loss = mae_loss + mse_loss + kl_loss + ms_ssim_loss + lpips_loss + geometry_loss
                 # loss = recon_loss
             scalar.scale(loss).backward()
@@ -207,28 +225,62 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
             # loss.backward()
             # optimizer.step()
             
-            running_mae_loss += mae_loss.item() * raw_data[0].shape[0]
-            running_mse_loss += mse_loss.item() * raw_data[0].shape[0]
-            running_mse_loss_val += mse_loss_val * raw_data[0].shape[0]
-            running_kl_loss += kl_loss.item() * raw_data[0].shape[0]
-            running_ms_ssim_loss += ms_ssim_loss.item() * raw_data[0].shape[0]
-            running_lpips_loss += lpips_loss.item() * raw_data[0].shape[0]
-            running_geometry_loss += geometry_loss.item() * raw_data[0].shape[0]
-            running_loss += running_mae_loss + running_mse_loss + running_kl_loss + running_ms_ssim_loss + running_lpips_loss + running_geometry_loss
-            total_elems += raw_data[0].shape[0]
+            # running_mae_loss += mae_loss.item() * raw_data[0].shape[0]
+            # running_mse_loss += mse_loss.item() * raw_data[0].shape[0]
+            # running_mse_loss_val += mse_loss_val * raw_data[0].shape[0]
+            # running_kl_loss += kl_loss.item() * raw_data[0].shape[0]
+            # running_ms_ssim_loss += ms_ssim_loss.item() * raw_data[0].shape[0]
+            # running_lpips_loss += lpips_loss.item() * raw_data[0].shape[0]
+            # running_geometry_loss += geometry_loss.item() * raw_data[0].shape[0]
+            # running_loss += running_mae_loss + running_mse_loss + running_kl_loss + running_ms_ssim_loss + running_lpips_loss + running_geometry_loss
+            # total_elems += raw_data[0].shape[0]
             
-            # TODO: need to sperate PSNR evaluation from each volume (cause currently has four volumes in one batch)
-            # console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
-            if console_logger is not None:
-                console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, MAE loss: {mae_loss.item():0,.6f}, MSE loss: {mse_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, MS-SSIM loss: {ms_ssim_loss.item():0,.6f}, LPIPS loss: {lpips_loss.item():0,.6f}, Geometry loss: {geometry_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(mse_loss_val))):0,.4f}, LR: {scheduler.optimizer.param_groups[0]['lr']}")
+            batch_size = raw_data[0].shape[0]
+
+            # reduce each loss before accumulating
+            mae_val = reduce_tensor(mae_loss.detach(), average=False).item()
+            mse_val = reduce_tensor(mse_loss.detach(), average=False).item()
+            mse_val_for_PSNR = reduce_tensor(mse_loss_for_PSNR.detach(), average=False).item()
+            kl_val = reduce_tensor(kl_loss.detach(), average=False).item()
+            ms_ssim_val = reduce_tensor(ms_ssim_loss.detach(), average=False).item()
+            lpips_val = reduce_tensor(lpips_loss.detach(), average=False).item()
+            geometry_val = reduce_tensor(geometry_loss.detach(), average=False).item()
+            loss_val = reduce_tensor(loss.detach(), average=True).item()
+            
+            
+            running_mae_loss += mae_val * batch_size
+            running_mse_loss += mse_val * batch_size
+            running_kl_loss += kl_val * batch_size
+            running_ms_ssim_loss += ms_ssim_val * batch_size
+            running_lpips_loss += lpips_val * batch_size
+            running_geometry_loss += geometry_val * batch_size
+            running_mse_loss_val += mse_val_for_PSNR * batch_size
+
+            running_loss += (
+                mae_val + mse_val + kl_val + ms_ssim_val + lpips_val + geometry_val
+            ) * batch_size
+            
+            batch_size_tensor = torch.tensor(batch_size, device=raw_data[0].device)
+            batch_size_tensor = reduce_tensor(batch_size_tensor, average=False)
+            total_elems += batch_size_tensor.item()
+            
+            # # TODO: need to sperate PSNR evaluation from each volume (cause currently has four volumes in one batch)
+            # # console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, Reconstruction PSNR: {(20 * torch.log10(raw_data.max() - raw_data.min() / torch.sqrt(recon_loss))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
+            # if console_logger is not None:
+            #     console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, MAE loss: {mae_loss.item():0,.6f}, MSE loss: {mse_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, MS-SSIM loss: {ms_ssim_loss.item():0,.6f}, LPIPS loss: {lpips_loss.item():0,.6f}, Geometry loss: {geometry_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(mse_loss_val))):0,.4f}, LR: {scheduler.optimizer.param_groups[0]['lr']}")
+            #     # console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
+            # else:
+            #     print(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, MAE loss: {mae_loss.item():0,.6f}, MSE loss: {mse_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, MS-SSIM loss: {ms_ssim_loss.item():0,.6f}, LPIPS loss: {lpips_loss.item():0,.6f}, Geometry loss: {geometry_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(mse_loss_val))):0,.4f}, LR: {scheduler.optimizer.param_groups[0]['lr']}")
+            #     # print(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
+            # # import pdb; pdb.set_trace()
+            if console_logger is not None and rank == 0:
+                console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss_val:0,.6f}, MAE loss: {(mae_val/dist.get_world_size()):0,.6f}, MSE loss: {(mse_val/dist.get_world_size()):0,.6f}, KL loss: {(kl_val/dist.get_world_size()):0,.6f}, MS-SSIM loss: {(ms_ssim_val/dist.get_world_size()):0,.6f}, LPIPS loss: {(lpips_val/dist.get_world_size()):0,.6f}, Geometry loss: {(geometry_val/dist.get_world_size()):0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(mse_val_for_PSNR/dist.get_world_size()))):0,.4f}, LR: {scheduler.optimizer.param_groups[0]['lr']}")
                 # console_logger.debug(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
-            else:
-                print(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, MAE loss: {mae_loss.item():0,.6f}, MSE loss: {mse_loss.item():0,.6f}, KL loss: {kl_loss.item():0,.6f}, MS-SSIM loss: {ms_ssim_loss.item():0,.6f}, LPIPS loss: {lpips_loss.item():0,.6f}, Geometry loss: {geometry_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(mse_loss_val))):0,.4f}, LR: {scheduler.optimizer.param_groups[0]['lr']}")
-                # print(f"Epoch {epoch}, Batch {batch_idx}, Total loss: {loss.item():0,.6f}, Recon loss: {recon_loss.item():0,.6f}, Reconstruction PSNR: {(20 * np.log10(value_range / np.sqrt(recon_loss.item()))):0,.4f}, LR: {scheduler.get_last_lr()[0]}")
-            # import pdb; pdb.set_trace()
-        
+            
         # calculate the average loss for the epoch
-        assert total_elems == len(train_dataloader.dataset), "total_elems should be equal to the dataset size"
+        # In DPP, distributed sampler would just pad last batch if the world size isn't divisable by #instances
+        # so, doesn't check this anymore
+        # assert total_elems == len(train_dataloader.dataset), "total_elems should be equal to the dataset size"
         last_mae_loss = running_mae_loss / total_elems
         last_mse_loss = running_mse_loss / total_elems
         last_mse_loss_val = running_mse_loss_val / total_elems
@@ -238,16 +290,17 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
         last_geometry_loss = running_geometry_loss / total_elems
         last_loss = running_loss / total_elems
         last_PSNR = 20 * np.log10(value_range / np.sqrt(last_mse_loss_val))
-        if tensorboard_writer is not None:
-            tensorboard_writer.add_scalar("Loss/Train_MAE", last_mae_loss, epoch)
-            tensorboard_writer.add_scalar("Loss/Train_MSE", last_mse_loss, epoch)
-            tensorboard_writer.add_scalar("Loss/Train_KL", last_kl_loss, epoch)
-            tensorboard_writer.add_scalar("Loss/Train_MS_SSIM", last_ms_ssim_loss, epoch)
-            tensorboard_writer.add_scalar("Loss/Train_LPIPS", last_lpips_loss, epoch)
-            tensorboard_writer.add_scalar("Loss/Train_GEO", last_geometry_loss, epoch)
-            tensorboard_writer.add_scalar("Loss/Train", last_loss, epoch)
-            tensorboard_writer.add_scalar("Loss/Train_PSNR", last_PSNR, epoch)
-            tensorboard_writer.add_scalar("Learning Rate", scheduler.get_last_lr()[0], epoch)
+        if rank == 0:
+            if tensorboard_writer is not None:
+                tensorboard_writer.add_scalar("Loss/Train_MAE", last_mae_loss, epoch)
+                tensorboard_writer.add_scalar("Loss/Train_MSE", last_mse_loss, epoch)
+                tensorboard_writer.add_scalar("Loss/Train_KL", last_kl_loss, epoch)
+                tensorboard_writer.add_scalar("Loss/Train_MS_SSIM", last_ms_ssim_loss, epoch)
+                tensorboard_writer.add_scalar("Loss/Train_LPIPS", last_lpips_loss, epoch)
+                tensorboard_writer.add_scalar("Loss/Train_GEO", last_geometry_loss, epoch)
+                tensorboard_writer.add_scalar("Loss/Train", last_loss, epoch)
+                tensorboard_writer.add_scalar("Loss/Train_PSNR", last_PSNR, epoch)
+                tensorboard_writer.add_scalar("Learning Rate", scheduler.get_last_lr()[0], epoch)
         
         # adjust learning rate
         if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
@@ -256,28 +309,30 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
             scheduler.step()  # StepLR, MultiStepLR, CosineAnnealingLR, etc.
         
         # save latent triplanes for inference later
-        if (epoch % ckpt_freq == (ckpt_freq - 1)) or (epoch == (epochs + resume_epoch) - 1):
-            outputs = []
-            indices = []
-            vae_model.eval()
-            with torch.no_grad():
-                for batch_idx, raw_data in enumerate(train_dataloader):
-                    mu, log_var = vae_model.module.encode(raw_data[0])
-                    output = vae_model.module.reparameterize(mu, log_var)
-                    outputs.append(output)
-                    indices.append(raw_data[1])        
-            outputs = torch.cat(outputs, dim=0)
-            indices = torch.cat(indices, dim=0)
-            # Sort outputs by indices
-            sorted_indices, sort_order = torch.sort(indices)
-            outputs = outputs[sort_order]
-            torch.save({"weights_latent_space": outputs}, os.path.join(run_dir, f"latent_triplanes_epoch_{epoch}.pt"))
-            vae_model.train()
-            del outputs, indices, sorted_indices, sort_order
-            torch.cuda.empty_cache()
+        # TODO: make it work with DPP
+        # if (epoch % ckpt_freq == (ckpt_freq - 1)) or (epoch == (epochs + resume_epoch) - 1):
+        #     outputs = []
+        #     indices = []
+        #     vae_model.eval()
+        #     with torch.no_grad():
+        #         for batch_idx, raw_data in enumerate(train_dataloader):
+        #             raw_data[0] = raw_data[0].to(device_id)
+        #             mu, log_var = vae_model.module.encode(raw_data[0])
+        #             output = vae_model.module.reparameterize(mu, log_var)
+        #             outputs.append(output)
+        #             indices.append(raw_data[1])        
+        #     outputs = torch.cat(outputs, dim=0)
+        #     indices = torch.cat(indices, dim=0)
+        #     # Sort outputs by indices
+        #     sorted_indices, sort_order = torch.sort(indices)
+        #     outputs = outputs[sort_order]
+        #     torch.save({"weights_latent_space": outputs}, os.path.join(run_dir, f"latent_triplanes_epoch_{epoch}.pt"))
+        #     vae_model.train()
+        #     del outputs, indices, sorted_indices, sort_order
+        #     torch.cuda.empty_cache()
         
         # save the model at checkpoint
-        if (epoch % ckpt_freq == (ckpt_freq - 1)) or (epoch == (epochs + resume_epoch) - 1):
+        if rank == 0 and ((epoch % ckpt_freq == (ckpt_freq - 1)) or (epoch == (epochs + resume_epoch) - 1)):
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': vae_model.state_dict(),
@@ -288,7 +343,7 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
                 'kl_loss': last_kl_loss,
                 'PSNR': last_PSNR,
             }, os.path.join(run_dir, f"vae_model_epoch_{epoch}.ckpt"))
-
+            console_logger.debug(f"Peak Memory Usage at ckpt (rank {rank}): alloc {torch.cuda.max_memory_allocated() / (1024 ** 3)} / resv {torch.cuda.max_memory_reserved() / (1024 ** 3)}")
             # # save one of the reconstructed volume data     
             # with open(os.path.join(run_dir, f"reconstructed_volume_epoch_{epoch}.data"), "wb") as f:
             #     # write the reconstructed volume data to file
@@ -297,14 +352,29 @@ def train_vae(vae_model, train_dataloader, optimizer, scheduler, epochs=100,
         
 
 if __name__ == "__main__":
+    # for multiple GPUs/nodes distributed training
+    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+    dist.init_process_group("nccl")
+    global rank
+    rank = dist.get_rank()
+    print(f"Start running DDP VAE training on rank {rank}.")
+    
     args = parse_args()
     
     cfg = importlib.import_module(f"autoencoder_config.triplane.{args.model_config}")
     
-    vae_model = torch.nn.DataParallel(VAE_no_KL(cfg.vae_config, cfg.encoder_dims, cfg.feature_size_encoder, cfg.decoder_dims,
-                                                cfg.feature_size_decoder, cfg.fpn_encoders_layer_dim_idx, cfg.fpn_decoders_layer_dim_idx,
-                                                cfg.fpn_encoders_down_idx, cfg.fpn_encoders_up_idx, cfg.fpn_decoders_down_idx,
-                                                cfg.fpn_decoders_up_idx, cfg.block_config)).cuda()
+    print(f"Before creating VAE: Rank {rank} memory allocated: {torch.cuda.memory_allocated() / (1024 ** 3)}")
+    
+    # create model and move it to GPU with id rank
+    global device_id
+    device_id = rank % torch.cuda.device_count()
+    vae_model = VAE_no_KL(cfg.vae_config, cfg.encoder_dims, cfg.feature_size_encoder, cfg.decoder_dims,
+                            cfg.feature_size_decoder, cfg.fpn_encoders_layer_dim_idx, cfg.fpn_decoders_layer_dim_idx,
+                            cfg.fpn_encoders_down_idx, cfg.fpn_encoders_up_idx, cfg.fpn_decoders_down_idx,
+                            cfg.fpn_decoders_up_idx, cfg.block_config).to(device_id)
+    vae_model = DDP(vae_model, device_ids=[device_id])
+    
+    print(f"After creating VAE: Rank {rank} memory allocated: {torch.cuda.memory_allocated() / (1024 ** 3)}")
     
     # n_timesteps = 90
     # n_instances = 250
@@ -314,35 +384,54 @@ if __name__ == "__main__":
     if args.resume_training_dir and args.resume_model_file_name:
         run_dir = args.resume_training_dir
         logging_file_md = 'a'
-        loaded_ckpt = torch.load(os.path.join(args.resume_training_dir, args.resume_model_file_name))
+        map_location = {'cuda:%d' % 0: 'cuda:%d' % rank}
+        loaded_ckpt = torch.load(os.path.join(args.resume_training_dir, args.resume_model_file_name), map_location=map_location)
     elif (args.resume_training_dir and not args.resume_model_file_name) or (not args.resume_training_dir and args.resume_model_file_name):
         RuntimeError("Missing resume training directory or model file name to resume training")
     else:
         # create directory for saving logs
+        # only rank 0 create the dir_name and broadcast to all others
+        if rank == 0:
+            dir_name = datetime.now().strftime("%Y%m%d-%H%M%S")
+            dist.broadcast_object_list([dir_name], src=0)
+            print(f"Rank {rank}: Sent '{dir_name}'")
+        else:
+            received_list = [None]
+            dist.broadcast_object_list(received_list, src=0)
+            dir_name = received_list[0]
+            print(f"Rank {rank}: Received '{dir_name}'")
         base_dir = "./logs"
-        os.makedirs(base_dir, exist_ok=True)
         expname_dir = os.path.join(base_dir, args.expname)
-        os.makedirs(expname_dir, exist_ok=True)
-        run_dir = os.path.join(expname_dir, datetime.now().strftime("%Y%m%d-%H%M%S"))
-        os.makedirs(run_dir, exist_ok=True)
-        logging_file_md = 'w'
+        run_dir = os.path.join(expname_dir, dir_name)
+        if rank == 0:
+            os.makedirs(base_dir, exist_ok=True)
+            os.makedirs(expname_dir, exist_ok=True)
+            os.makedirs(run_dir, exist_ok=True)
+            logging_file_md = 'w'
     
-    # create tensorboard logger
-    from torch.utils.tensorboard import SummaryWriter
-    tensorboard_writer = SummaryWriter(log_dir=run_dir)
+    if rank == 0:
+        # create tensorboard logger
+        from torch.utils.tensorboard import SummaryWriter
+        tensorboard_writer = SummaryWriter(log_dir=run_dir)
     
-    # prepare python logger
-    logging.basicConfig(filename=os.path.join(run_dir, "console_log.log"),
-                    format='%(asctime)s %(message)s',
-                    filemode=logging_file_md)
-    console_logger = logging.getLogger()
-    console_logger.setLevel(logging.DEBUG)
+        # prepare python logger
+        logging.basicConfig(filename=os.path.join(run_dir, "console_log.log"),
+                        format='%(asctime)s %(message)s',
+                        filemode=logging_file_md)
+        console_logger = logging.getLogger()
+        console_logger.setLevel(logging.DEBUG)
 
-    # to suppress matplotlib logging
-    logging.getLogger('matplotlib').setLevel(logging.WARNING)
+        # to suppress matplotlib logging
+        logging.getLogger('matplotlib').setLevel(logging.WARNING)
+        console_logger.debug(f"Initial memory allocated after creating VAE (rank {rank}): {torch.cuda.memory_allocated() / (1024 ** 3)}")
+    else:
+        # placeholder for other ranks
+        tensorboard_writer = None
+        console_logger = None
+        
 
     # load pretrained tri-plane here
-    loaded_model = torch.load(args.pretrained_triplane_file_path)
+    loaded_model = torch.load(args.pretrained_triplane_file_path, map_location="cpu")
     keys = loaded_model['triplane_state_dict'].keys()
     n_instances = sum(1 for k in keys if k.endswith("triplane"))
     triplane_weights = [loaded_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_instances)]
@@ -363,17 +452,22 @@ if __name__ == "__main__":
     triplane_weights = (triplane_weights - original_triplane_min) / (original_triplane_max - original_triplane_min)
     triplane_weights = triplane_weights * 2 - 1
     
-    train_dataloader = torch.utils.data.DataLoader(
-        LatentWeightDataset(
-        # test training for only one volume
-        # triplane_weights[50:51],
+    dataset = LatentWeightDataset(
         triplane_weights,
-        cfg.vae_config["plane_shape"]),
+        cfg.vae_config["plane_shape"])
+    
+    distributed_sampler = torch.utils.data.distributed.DistributedSampler(dataset)
+    
+    train_dataloader = torch.utils.data.DataLoader(
+        dataset,
         batch_size=args.batch_size,
-        shuffle=True)
+        shuffle=False,
+        sampler=distributed_sampler)
+    
     # input_tensor = torch.randn(2, 3, 32, 128, 128).cuda()
-    input_tensor = next(iter(train_dataloader))[0].cuda()
+    input_tensor = next(iter(train_dataloader))[0].to(device_id)
     out = vae_model(input_tensor)
+    print(f"Rank: {rank} Memory allocated: {torch.cuda.memory_allocated() / (1024 ** 3)}")
     loss = vae_model.module.loss_function(*out)
     print("loss: {}".format(loss))
     print("z shape: {}".format(out[-1].shape))
@@ -398,8 +492,9 @@ if __name__ == "__main__":
     # resume training
     if args.resume_training_dir and args.resume_model_file_name:
         resume_epoch = loaded_ckpt["epoch"] + 1
-        console_logger.debug(f"Resume training from {args.resume_training_dir}/{args.resume_model_file_name} at Epoch {resume_epoch}")
-        console_logger.debug(f"Batch Size: {args.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
+        if rank == 0:
+            console_logger.debug(f"Resume training from {args.resume_training_dir}/{args.resume_model_file_name} at Epoch {resume_epoch}")
+            console_logger.debug(f"Batch Size: {args.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
         vae_model.load_state_dict(loaded_ckpt["model_state_dict"])
         optimizer.load_state_dict(loaded_ckpt["optimizer_state_dict"])
         # check whether users pass lr for resume training
@@ -412,39 +507,44 @@ if __name__ == "__main__":
             # for MultiStepLR resume training, set milestones epochs relative to resume points
             # E.g., if resuming from epoch 1000 and want LR decay at 1500, keep milestone as 500 (not 1500).
             scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer=optimizer, milestones=args.milestones, gamma=args.lr_gamma)
-            console_logger.debug(f"Reset learning rate to {args.init_lr}, milestone epochs to {args.milestones}, learning rate decay factor to {args.lr_gamma}")
+            if rank == 0:
+                console_logger.debug(f"Reset learning rate to {args.init_lr}, milestone epochs to {args.milestones}, learning rate decay factor to {args.lr_gamma}")
         elif "--init_lr" in sys.argv and "--lr_gamma" in sys.argv and "--patience" in sys.argv:
             for param_group in optimizer.param_groups:
                 param_group['lr'] = args.init_lr
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode='min', factor=args.lr_gamma, patience=args.patience)
-            console_logger.debug(f"Reset learning rate to {args.init_lr}, patience epochs to {args.patience}, learning rate decay factor to {args.lr_gamma}")
+            if rank == 0:
+                console_logger.debug(f"Reset learning rate to {args.init_lr}, patience epochs to {args.patience}, learning rate decay factor to {args.lr_gamma}")
         elif "--init_lr" in sys.argv or "--lr_gamma" in sys.argv or "--patience" in sys.argv or "--milestones" in sys.argv:
             raise RuntimeError("Only reset either init_lr, lr_gamma, patience, or milestones for resuming training, please reset three arguments at the same time")
         else:
             scheduler.load_state_dict(loaded_ckpt["scheduler_state_dict"])
-            console_logger.debug(f"Use original learning rate and scheduler settings")
+            if rank == 0:
+                console_logger.debug(f"Use original learning rate and scheduler settings")
         # free up memory for training
         del loaded_ckpt
         torch.cuda.empty_cache()
-        console_logger.debug(f"MAE Loss Weight: {args.mae_loss_weight}, MSE Loss Weight: {args.mse_loss_weight}, MS SSIM Loss Weight: {args.ms_ssim_loss_weight}")
-        console_logger.debug(f"LPIPS Loss Weight: {args.lpips_loss_weight}, KL Loss Weight Values:{args.kl_loss_weight_values}, KL Loss Weight Epochs:{args.kl_loss_weight_epochs}")
-        console_logger.debug(f"Geometry Loss Weight: {args.geometry_loss_weight}")
+        if rank == 0:
+            console_logger.debug(f"MAE Loss Weight: {args.mae_loss_weight}, MSE Loss Weight: {args.mse_loss_weight}, MS SSIM Loss Weight: {args.ms_ssim_loss_weight}")
+            console_logger.debug(f"LPIPS Loss Weight: {args.lpips_loss_weight}, KL Loss Weight Values:{args.kl_loss_weight_values}, KL Loss Weight Epochs:{args.kl_loss_weight_epochs}")
+            console_logger.debug(f"Geometry Loss Weight: {args.geometry_loss_weight}")
         
     # training from scratch
     else:
         resume_epoch = 0
-        tensorboard_writer.add_text("Model/Architecture", f"```\n{model_arch_str}\n```", global_step=0)
-    
-        console_logger.debug("Experiment description: " + args.description)
-        console_logger.debug(f"Batch Size: {args.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
-        if args.milestones:
-            console_logger.debug(f"Initial Learning rate: {args.init_lr}, Milestones: {args.milestones}, Learning rate Decay Factor: {args.lr_gamma}")
-        else:
-            console_logger.debug(f"Initial Learning rate: {args.init_lr}, Patience Epochs: {args.patience}, Learning rate Decay Factor: {args.lr_gamma}")
-        console_logger.debug(f"Model config: autoencoder_config.triplane.{args.model_config}")
-        console_logger.debug(f"MAE Loss Weight: {args.mae_loss_weight}, MSE Loss Weight: {args.mse_loss_weight}, MS SSIM Loss Weight: {args.ms_ssim_loss_weight}")
-        console_logger.debug(f"LPIPS Loss Weight: {args.lpips_loss_weight}, KL Loss Weight Values:{args.kl_loss_weight_values}, KL Loss Weight Epochs:{args.kl_loss_weight_epochs}")
-        console_logger.debug(f"Geometry Loss Weight: {args.geometry_loss_weight}")
+        if rank == 0:
+            tensorboard_writer.add_text("Model/Architecture", f"```\n{model_arch_str}\n```", global_step=0)
+        
+            console_logger.debug("Experiment description: " + args.description)
+            console_logger.debug(f"Batch Size: {args.batch_size}, Epochs: {args.epochs}, Checkpoint Frequency: {args.ckpt_freq}")
+            if args.milestones:
+                console_logger.debug(f"Initial Learning rate: {args.init_lr}, Milestones: {args.milestones}, Learning rate Decay Factor: {args.lr_gamma}")
+            else:
+                console_logger.debug(f"Initial Learning rate: {args.init_lr}, Patience Epochs: {args.patience}, Learning rate Decay Factor: {args.lr_gamma}")
+            console_logger.debug(f"Model config: autoencoder_config.triplane.{args.model_config}")
+            console_logger.debug(f"MAE Loss Weight: {args.mae_loss_weight}, MSE Loss Weight: {args.mse_loss_weight}, MS SSIM Loss Weight: {args.ms_ssim_loss_weight}")
+            console_logger.debug(f"LPIPS Loss Weight: {args.lpips_loss_weight}, KL Loss Weight Values:{args.kl_loss_weight_values}, KL Loss Weight Epochs:{args.kl_loss_weight_epochs}")
+            console_logger.debug(f"Geometry Loss Weight: {args.geometry_loss_weight}")
         
     # prepare pre-sampled points' coordinates and values
     # dataset_for_sampling = SampleTimevaryingDataset(
@@ -456,6 +556,7 @@ if __name__ == "__main__":
     #     n_channels=1,
     #     sample_batch_size=args.geometry_loss_sample_size
     # )
+    # TODO: remember to tweak for DDP training
     if args.geometry_loss_weight != 0.0:
         dataset_for_sampling = SampleShadowVolumesDataset(
             raw_data_dir="/home/kctung/Ring1Light",
@@ -477,7 +578,7 @@ if __name__ == "__main__":
         net = None
         triplane = None
     
-    train_vae(vae_model, train_dataloader, optimizer, scheduler, args.epochs, tensorboard_writer, console_logger, run_dir, args.ckpt_freq, resume_epoch,
+    train_vae(vae_model, train_dataloader, distributed_sampler, optimizer, scheduler, args.epochs, tensorboard_writer, console_logger, run_dir, args.ckpt_freq, resume_epoch,
               args.mae_loss_weight, args.mse_loss_weight, args.ms_ssim_loss_weight, args.lpips_loss_weight, args.kl_loss_weight_values, args.kl_loss_weight_epochs,
               args.geometry_loss_weight, dataset_for_sampling, net, triplane, original_triplane_min, original_triplane_max)
     
