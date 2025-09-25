@@ -101,7 +101,7 @@ def inference(dataset, data_res, chunk_size, value_range, triplane, net, instanc
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='base_timevarying.json')
+    parser.add_argument('--configs', type=str, nargs='+', default='base_timevarying.json')
     parser.add_argument('--instances_to_store', type=int, nargs='+', default=[0])
     parser.add_argument('--result_plot_name', type=str, default="psnr_plot")
     parser.add_argument('--triplane_file_paths', type=str, nargs='+', default="../VAE_Reconstructed_triplane.pt")
@@ -112,48 +112,22 @@ if __name__ == "__main__":
     parser.add_argument('--dtype', type=str, default='float32')
     parser.add_argument('--raw_data_file_path', type=str, default="/media/data/qadwu/volume/vortices/vorts1.data")
     parser.add_argument('--tfn_file_path', type=str, default="/home/kctung/Projects/instant-vnr-pytorch/bindings/ovr/data/configs/vorts_shadow.json")
-    parser.add_argument('--n_instances', type=int, default=150, help="Number of shadow volumes to generate")
+    # parser.add_argument('--n_instances', type=int, default=150, help="Number of shadow volumes to generate")
     args = parser.parse_args()
-
-    with open(args.config, 'r') as f:
-        config = json.load(f)
-    config = edict(config)
-    # assert len(config.fixmlp) > 0
     
-    n_instances = args.n_instances
+    # n_instances = args.n_instances
     # data_res = [128, 128, 128]
     data_res = args.dims
     chunk_size = 65536*192
-
-    # net = Network(
-    #     d_in=config.channel,
-    #     d_hid=config.n_hid,
-    #     n_layers=config.n_layers,
-    #     d_out=config.n_labels,
-    #     init_type="geo_init",
-    # ).cuda()
-    
-    net = MLP_TCNN(n_input_dims=config.channel, n_output_dims=config.n_labels,
-                n_hidden_layers=config.n_layers, n_neurons=config.n_hid,
-                activation="ReLU", output_activation="None")
-
-    # instantiate multiple triplanes (each instance has its own triplane)
-    triplane = [Triplane(
-        reso=config.resolution,
-        channel=config.channel,
-        init_type="geo_init",
-        objname=None,
-    ) for _ in range(n_instances)]
-    triplane = nn.ModuleList(triplane)
     
     sampler = create_sampler("structuredRegular", "cuda", dims=args.dims, dtype=args.dtype, n_channels=1, filename=args.raw_data_file_path)
     # import pdb; pdb.set_trace()
     
     # just use the first triplane to load light directions
     # should compare all sets of triplanes that have the same light direction set
-    loaded_model = torch.load(args.triplane_file_paths[0])
-    # TODO: think of how to compare
-    assert args.n_instances == len(loaded_model['light_dir_cartesian'])
+    # loaded_model = torch.load(args.triplane_file_paths[0])
+    # # TODO: think of how to compare
+    # assert args.n_instances == len(loaded_model['light_dir_cartesian'])
     
     # ### section of hacky way to temporarily bypass the problem (not used anymore)
     # spherical_coords = cartesian_to_spherical_coords(np.array(loaded_model['light_dir_cartesian']))
@@ -173,30 +147,65 @@ if __name__ == "__main__":
     # print(f"{6}: {corrected_spherical_coords.shape}")
     # ### section end
     
-    # prepare dataset for evaluation
-    dataset = RandomlyGenerateLightDir(
-        sampler=sampler,
-        n_instances=args.n_instances,
-        tfn=args.tfn_file_path,
-        sample_batch_size=config.sample_batch_size,
-        light_dir_spherical=cartesian_to_spherical_coords(np.array(loaded_model['light_dir_cartesian'])).tolist()
-        # light_dir_spherical=loaded_model['light_dir_spherical']
-        # light_dir_spherical=corrected_spherical_coords.tolist()
-    )
-    value_range = dataset.value_range
-    
     psnr_lists = []
-    for triplane_file_path, recon_type in zip(args.triplane_file_paths, args.triplane_recon_types):
+    for config_file_path, triplane_file_path, recon_type in zip(args.configs, args.triplane_file_paths, args.triplane_recon_types):
+        
         loaded_model = torch.load(triplane_file_path, map_location="cpu")
+        
+        n_instances = len(loaded_model['light_dir_cartesian'])
+        
+        with open(config_file_path, 'r') as f:
+            config = json.load(f)
+        config = edict(config)
+        # assert len(config.fixmlp) > 0
+        
+        # prepare dataset for evaluation
+        dataset = RandomlyGenerateLightDir(
+            sampler=sampler,
+            n_instances=n_instances,
+            tfn=args.tfn_file_path,
+            sample_batch_size=config.sample_batch_size,
+            light_dir_spherical=cartesian_to_spherical_coords(np.array(loaded_model['light_dir_cartesian'])).tolist()
+            # light_dir_spherical=loaded_model['light_dir_spherical']
+            # light_dir_spherical=corrected_spherical_coords.tolist()
+        )
+        value_range = dataset.value_range
+        
+        # net = Network(
+        #     d_in=config.channel,
+        #     d_hid=config.n_hid,
+        #     n_layers=config.n_layers,
+        #     d_out=config.n_labels,
+        #     init_type="geo_init",
+        # ).cuda()
+        
+        net = MLP_TCNN(n_input_dims=config.channel, n_output_dims=config.n_labels,
+                    n_hidden_layers=config.n_layers, n_neurons=config.n_hid,
+                    activation="ReLU", output_activation="None")
+
+        # instantiate multiple triplanes (each instance has its own triplane)
+        triplane = [Triplane(
+            reso=config.resolution,
+            channel=config.channel,
+            init_type="geo_init",
+            objname=None,
+        ) for _ in range(n_instances)]
+        triplane = nn.ModuleList(triplane)
 
         net.load_state_dict(loaded_model['net_state_dict'])
         triplane.load_state_dict(loaded_model['triplane_state_dict'])
         psnr_lists.append(inference(dataset, data_res, chunk_size, value_range, triplane, net, args.instances_to_store, recon_type))
     
-    for idx in range(len(psnr_lists[0])):
+    # refactor for various #instances
+    max_instances = max(len(lst) for lst in psnr_lists)
+    
+    for idx in range(max_instances):
         print(f"instance {idx} - ", end="")
         for j in range(len(psnr_lists)):
-            print(f"{args.triplane_recon_types[j]} PSNR: {psnr_lists[j][idx]}, ", end="")
+            if idx < len(psnr_lists[j]):  # check if this list has enough elements
+                print(f"{args.triplane_recon_types[j]} PSNR: {psnr_lists[j][idx]}, ", end="")
+            else:
+                print(f"{args.triplane_recon_types[j]} PSNR: N / A, ", end="")
         print("")
         # print(psnr_list[i], ssim_list[i])
     
