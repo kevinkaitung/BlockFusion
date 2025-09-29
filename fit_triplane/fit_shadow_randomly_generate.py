@@ -379,9 +379,9 @@ if __name__ == "__main__":
 
     for epoch in tqdm(range(start_iter+1, config.max_iters + 1)):
         
-        running_loss = torch.tensor(0.0).cuda()
+        running_loss = 0.0
         
-        loss_list = []
+        # loss_list = []
 
         # for debugging
         if epoch % 2000 == 0:
@@ -447,18 +447,19 @@ if __name__ == "__main__":
             optimizer.step()
             # print(f"After step Mem Alloc: {torch.cuda.memory_allocated() / 1024**3:.2f} GB / Reserved: {torch.cuda.memory_reserved() / 1024**3:.2f} GB / Max Alloc: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB / Max Reserved: {torch.cuda.max_memory_reserved() / 1024**3:.2f} GB")
             
-            running_loss += loss.detach()
+            running_loss += loss.item()
             del loss
             torch.cuda.empty_cache()
             
         avg_loss = running_loss / len(train_dataloader)
-        loss_list.append(avg_loss)
-        PSNR_value = (20 * torch.log10(value_range / torch.sqrt(avg_loss))).item()
-        console_logger.debug(f"Epoch {epoch}, Loss: {avg_loss.item()}, , Reconstruction PSNR: {(PSNR_value):0,.4f}")
-        print(f"Epoch {epoch}, Loss: {avg_loss.item()}, , Reconstruction PSNR: {(PSNR_value):0,.4f}")
-        tensorboard_writer.add_scalar("Loss/Train", avg_loss.item(), epoch)
+        # loss_list.append(avg_loss)
+        PSNR_value = (20 * np.log10(value_range / np.sqrt(avg_loss))).item()
+        console_logger.debug(f"Epoch {epoch}, Loss: {avg_loss}, , Reconstruction PSNR: {(PSNR_value):0,.4f}")
+        print(f"Epoch {epoch}, Loss: {avg_loss}, , Reconstruction PSNR: {(PSNR_value):0,.4f}")
+        tensorboard_writer.add_scalar("Loss/Train", avg_loss, epoch)
         tensorboard_writer.add_scalar("Loss/Train_PSNR", PSNR_value, epoch)
         update_lr(optimizer, epoch, config)
+        print(f"Mem Alloc: {torch.cuda.memory_allocated() / 1024**3:.2f} GB / Reserved: {torch.cuda.memory_reserved() / 1024**3:.2f} GB / Max Alloc: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB / Max Reserved: {torch.cuda.max_memory_reserved() / 1024**3:.2f} GB")
 
     for param_group in optimizer.param_groups:
         if "net" in param_group['name']:
