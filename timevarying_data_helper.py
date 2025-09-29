@@ -369,20 +369,24 @@ def fibonacci_sphere(samples=1000, randomize=True):
 
 class RandomlyGenerateLightDir(torch.utils.data.Dataset):
     def __init__(
-        self, sampler, n_instances, tfn, sample_batch_size=2**10, light_dir_spherical=None
+        self, sampler, n_instances, tfn, sample_batch_size=2**10, light_dir_spherical=None, light_dir_cartesian=None
     ):
         self.sampler = sampler
         self.n_instances = n_instances
         self.tfn = tfn
         self.sample_batch_size = sample_batch_size
-        if light_dir_spherical is None:
+        if light_dir_spherical is None and light_dir_cartesian is None:
             # randomly generate n_instances light dir
             # self.light_dir_spherical = np.random.rand(n_instances, 2)
             self.light_dir_cartesian = fibonacci_sphere(n_instances)
             self.light_dir_spherical = cartesian_to_spherical_coords(self.light_dir_cartesian)
         else:
-            self.light_dir_spherical = np.array(light_dir_spherical)
-            self.light_dir_cartesian = spherical_to_cartesian_coords(self.light_dir_spherical)
+            if light_dir_spherical:
+                self.light_dir_spherical = np.array(light_dir_spherical)
+                self.light_dir_cartesian = spherical_to_cartesian_coords(self.light_dir_spherical)
+            elif light_dir_cartesian:
+                self.light_dir_cartesian = np.array(light_dir_cartesian)
+                self.light_dir_spherical = cartesian_to_spherical_coords(self.light_dir_cartesian)
         # convert spherical coords from radiance unit to normalized value (0~1) for using in shadow sampler
         self.light_dir_spherical_normalized = spherical_coords_radiance_to_normalized(self.light_dir_spherical)
         
