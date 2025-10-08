@@ -9,8 +9,8 @@ import argparse
 # Replace this with your custom model import if needed
 from diffusers import Conv3DAwareUNet, Conv3DAwareUNet2DConditionModel  # or any U-Net class you used
 from diffusion_training import FourierEmbedder
-from timevarying_data_helper import ShadowVolumesMetaDataset, ShadowLightingDirectionsDataset, spherical_to_cartesian_coords
-
+from timevarying_data_helper import ShadowVolumesMetaDataset, ShadowLightingDirectionsDataset, spherical_to_cartesian_coords, fibonacci_sphere
+import json
 import numpy as np
 
 num_freqs = 64
@@ -47,6 +47,7 @@ def parse_args():
     parser.add_argument("--pretrained_triplane_file_path", type=str, default=None, help="File Path to Pretrained Triplanes Model")
     # for evaluation on the results conditioned by randomly generated lights
     parser.add_argument("--n_randomly_generated_lights", type=int, default=None, help="Number of randomly generated lights")
+    parser.add_argument("--sampled_lighting_dirs_path", type=str, default=None, help="File Path to lighting dirs list")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -102,7 +103,15 @@ if __name__ == "__main__":
     elif args.n_randomly_generated_lights:
         # randomly generate lighting directions in cartesian space
         shadow_meta_dataset = ShadowLightingDirectionsDataset(
-            lighting_dirs=np.random.rand(args.n_randomly_generated_lights, 3)
+            lighting_dirs=fibonacci_sphere(args.n_randomly_generated_lights)
+        )
+    elif args.sampled_lighting_dirs_path:
+        with open(args.sampled_lighting_dirs_path, 'r') as f:
+            sampled_lighting_dirs = json.load(f)
+        sampled_lighting_dirs = np.array(sampled_lighting_dirs)
+        shadow_meta_dataset = ShadowLightingDirectionsDataset(
+            # TODO: see how to select idx
+            lighting_dirs=sampled_lighting_dirs.reshape(-1, 3)
         )
     else:
         raise RuntimeError("Need to specify one of the args: args.pretrained_triplane_file_path or args.n_randomly_generated_lights")

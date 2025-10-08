@@ -220,3 +220,23 @@ if __name__ == "__main__":
     plt.legend()
     plt.savefig(f'{args.result_plot_name}.png')
     plt.close()
+    
+    # import math
+    # # for plot sampled lighting directions
+    # group_size = 9
+    # plt.figure(figsize=(10, 6))
+    # for idx in range(len(psnr_lists)):
+    #     num_groups = math.ceil(len(psnr_lists[idx]) / group_size)
+    #     for group_idx in range(num_groups):
+    #         start = group_idx * group_size
+    #         end = (group_idx + 1) * group_size
+    #         plt.subplot(math.ceil(num_groups / 2), 2, group_idx+1)
+    #         plt.plot(range(len(psnr_lists[idx][start:end])), psnr_lists[idx][start:end], label=f'{args.triplane_recon_types[idx]} PSNR (avg: {np.mean(np.stack(psnr_lists[idx][start:end])):0,.4f})')
+    #         plt.xlabel('Instance Idx (center pt at idx 4)')
+    #         plt.ylabel('PSNR (dB)')
+    #         plt.title(f"Group {group_idx}")
+    #         plt.grid(True)
+    #         plt.legend()
+    # plt.tight_layout()
+    # plt.savefig(f'{args.result_plot_name}.png')
+    # plt.close()
