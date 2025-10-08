@@ -33,6 +33,7 @@ from visualize_triplane import plot_single_channel
 from timevarying_data_helper import SampleShadowVolumesDataset, RandomlyGenerateLightDir, fibonacci_sphere, cartesian_to_spherical_coords
 
 check_plane_idx = 40
+vis_triplane_freq = 2500
 
 def create_optimizer(net, triplane, config, optimizer_type):
     params_to_train = []
@@ -201,7 +202,7 @@ if __name__ == "__main__":
         permuted = np.random.permutation(triplane_offsets).tolist()
         start_epoch = run * num_epoch_to_reload_new_subset
                 
-        for offset in permuted:
+        for offset_idx, offset in enumerate(permuted):
             
             subset_model = torch.load(os.path.join(run_dir, f"triplane_offset_{offset}.ckpt"))
             
@@ -217,7 +218,8 @@ if __name__ == "__main__":
             triplane.load_state_dict(subset_model['triplane_state_dict'])
             
             # in the last run (upon convergence), freeze MLP and only optimize triplanes
-            if run == num_run - 1:
+            # if run == num_run - 1:
+            if offset_idx > 0:
                 # placeholder to create optimizer for complying loaded state dict
                 optimizer = create_optimizer(net, triplane, config, args.optimizer_type)
                 # still load optimizer state dict first -> for triplanes state
@@ -231,7 +233,10 @@ if __name__ == "__main__":
                 net_idx_to_delete = 0
                 for i, param_group in enumerate(optimizer.param_groups):
                     if "net" in param_group['name']:
-                        del optimizer.state[param_group['params'][0]]
+                        # only if the parameter key appears in the optimizer state
+                        # we can access it
+                        if param_group['params'][0] in optimizer.state:
+                            del optimizer.state[param_group['params'][0]]
                         net_idx_to_delete = i
                         break
                 del optimizer.param_groups[net_idx_to_delete]
@@ -280,7 +285,7 @@ if __name__ == "__main__":
                 # loss_list = []
 
                 # for debugging
-                if epoch % 2000 == 0:
+                if epoch % vis_triplane_freq == 0:
                     for dim in range(3):
                         plot_single_channel(
                             triplane[check_plane_idx].triplane[0][dim][16].detach(), 
@@ -352,8 +357,16 @@ if __name__ == "__main__":
                 update_lr(optimizer, epoch, config)
                 print(f"Mem Alloc: {torch.cuda.memory_allocated() / 1024**3:.2f} GB / Reserved: {torch.cuda.memory_reserved() / 1024**3:.2f} GB / Max Alloc: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB / Max Reserved: {torch.cuda.max_memory_reserved() / 1024**3:.2f} GB")
 
+            # get the final learning rates of triplane and MLP
+            for param_group in optimizer.param_groups:
+                if "tri" in param_group['name']:
+                    final_lr_tri = param_group['lr']
+                else:
+                    final_lr_tri = None
+
             # save this subset training results to disk
             torch.save({
+                'net_state_dict': net.state_dict(),
                 'triplane_state_dict': triplane.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'light_dir_spherical': subset_model['light_dir_spherical'],
@@ -361,32 +374,29 @@ if __name__ == "__main__":
                 'offset': offset,
                 'end_idx': subset_model['end_idx'],
                 # 'lr_net': final_lr_net,
-                # 'lr_tri': final_lr_tri,
+                'lr_tri': final_lr_tri,
                 'triplane_resolution': current_tri_reso,
                 'epoch': epoch,
             }, os.path.join(run_dir, f"triplane_offset_{offset}.ckpt"))
 
-    for param_group in optimizer.param_groups:
-        if "net" in param_group['name']:
-            final_lr_net = param_group['lr']
-        else:
-            final_lr_net = None
-        if "tri" in param_group['name']:
-            final_lr_tri = param_group['lr']
-        else:
-            final_lr_tri = None
-        
-    torch.save({
-                    'net_state_dict': net.state_dict(),
-                    # 'triplane_state_dict': triplane.state_dict(),
-                    # no longer keep net optimizer state after the final stage of triplane training
-                    # TODO: maybe can keep the last net optimizer state somewhere
-                    # 'optimizer_state_dict': optimizer.state_dict(),
-                    'light_dir_spherical': all_lighting_dirs_spherical,
-                    'light_dir_cartesian': all_lighting_dirs_cartesian,
-                    'permuted_indices': permuted_indices.tolist(),
-                    'lr_net': final_lr_net,
-                    'lr_tri': final_lr_tri,
-                    'epoch': epoch,
-                }, os.path.join(run_dir, f"mlp_epoch_{epoch}.ckpt"))
+            # after training the first subset, save pretrained MLP state dict
+            # also save all lighting dirs and permuted indices
+            if offset_idx == 0:
+                for param_group in optimizer.param_groups:
+                    if "net" in param_group['name']:
+                        final_lr_net = param_group['lr']
+                    else:
+                        final_lr_net = None
+                
+                torch.save({
+                                'net_state_dict': net.state_dict(),
+                                # no longer keep net optimizer state after the final stage of triplane training
+                                # TODO: maybe can keep the last net optimizer state somewhere
+                                # 'optimizer_state_dict': optimizer.state_dict(),
+                                'light_dir_spherical': all_lighting_dirs_spherical,
+                                'light_dir_cartesian': all_lighting_dirs_cartesian,
+                                'permuted_indices': permuted_indices.tolist(),
+                                'lr_net': final_lr_net,
+                                'epoch': epoch,
+                            }, os.path.join(run_dir, f"pretrained_mlp.ckpt"))
     console_logger.debug(f"Peak memory usage: allocated: {torch.cuda.memory.max_memory_allocated() / 1024**3} reserved: {torch.cuda.memory.max_memory_reserved() / 1024**3}")
