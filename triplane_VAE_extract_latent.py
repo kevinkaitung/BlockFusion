@@ -59,7 +59,7 @@ if __name__ == "__main__":
     vae_model.load_state_dict(torch.load(os.path.join(args.expdir, args.model_file_name), weights_only=False)["model_state_dict"])
         
     # load pretrained tri-plane here
-    pretrained_triplane_model = torch.load(args.pretrained_triplane_file_path)
+    pretrained_triplane_model = torch.load(args.pretrained_triplane_file_path, map_location="cpu")
     keys = pretrained_triplane_model['triplane_state_dict'].keys()
     n_instances = sum(1 for k in keys if k.endswith("triplane"))
     triplane_weights = [pretrained_triplane_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_instances)]
@@ -113,6 +113,7 @@ if __name__ == "__main__":
         for batch_idx, raw_data in enumerate(train_dataloader):
             
             if is_encode:
+                raw_data[0] = raw_data[0].cuda()
                 mu, log_var = vae_model.module.encode(raw_data[0])
                 output = vae_model.module.reparameterize(mu, log_var)
                 # output = vae_model.module.encode(raw_data[0])
