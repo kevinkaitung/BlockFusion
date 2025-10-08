@@ -1851,7 +1851,7 @@ class VAE_no_KL(nn.Module):
             use_checkpoint=False,
             group_layer_num_in=1
         ),
-            # nn.BatchNorm2d(encoder_dims[0]),
+            nn.BatchNorm2d(encoder_dims[0]),
             nn.SiLU())
 
 
@@ -1877,7 +1877,7 @@ class VAE_no_KL(nn.Module):
             use_checkpoint=False,
             group_layer_num_in=1
         ),
-            # nn.BatchNorm2d(deocder_dims[0]),
+            nn.BatchNorm2d(decoder_dims[0]),
             nn.SiLU())
 
         self.decoders_down = nn.ModuleList()
@@ -1906,7 +1906,7 @@ class VAE_no_KL(nn.Module):
             else:
                 RuntimeError(f"Unsupported stride {stride} for conv layer")
         layers.extend([conv, 
-                    #    nn.BatchNorm2d(inter_channels), 
+                       nn.BatchNorm2d(inter_channels), 
                        nn.SiLU()])
         
         if use_transformer:
@@ -1963,11 +1963,11 @@ class VAE_no_KL(nn.Module):
         
             if is_decoder_output:
                 layers.extend([ 
-                            #    nn.BatchNorm2d(out_channels), 
+                               nn.BatchNorm2d(out_channels), 
                                 nn.Tanh()])
             else:
                 layers.extend([ 
-                            #    nn.BatchNorm2d(out_channels), 
+                               nn.BatchNorm2d(out_channels), 
                                 nn.SiLU()])
         
         return nn.Sequential(*layers)
