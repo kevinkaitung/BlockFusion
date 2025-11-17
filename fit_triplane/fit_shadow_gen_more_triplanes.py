@@ -32,6 +32,9 @@ from visualize_triplane import plot_single_channel
 from timevarying_data_helper import SampleShadowVolumesDataset, RandomlyGenerateLightDir
 from fit_shadow_randomly_generate import Triplane, MLP_TCNN, Network
 
+check_plane_idx = 40
+vis_triplane_freq = 2000
+
 def create_optimizer(net, triplane, config, optimizer_type):
     params_to_train = []
     if net is not None:
@@ -45,30 +48,29 @@ def create_optimizer(net, triplane, config, optimizer_type):
     else:
         raise RuntimeError(f"{optimizer_type} optimizer not supported!")
 
-def update_lr(optimizer, epoch, max_iters, res_iter):
-    # TODO: make sure the lr for finetuning is reasonable
-    learning_factor_net = (np.cos(np.pi * epoch / max_iters) + 1.0) * 0.5 * (1 - 0.001) + 0.001
-    learning_factor_tri = (np.cos(np.pi * (epoch - res_iter) / (max_iters - res_iter)) + 1.0) * 0.5 * (1 - 0.001) + 0.001
+def update_lr(optimizer, epoch, config):
+    # here assume we train from epoch 0, so simply take fraction current epoch over total epoch
+    # since we use pretrained MLP to generate more triplane
+    learning_factor = (np.cos(np.pi * epoch / config.max_iters) + 1.0) * 0.5 * (1 - 0.001) + 0.001
     for param_group in optimizer.param_groups:
-        if "net" in param_group['name']:
-            param_group['lr'] = config.lr_net * learning_factor_net
+        # might not need this anymore because pretrained MLP only used to optimize triplanes
+        # if "net" in param_group['name']:
+        #     param_group['lr'] = config.lr_net * learning_factor
         if "tri" in param_group['name']:
-            param_group['lr'] = config.lr_tri * learning_factor_tri
+            param_group['lr'] = config.lr_tri * learning_factor
 
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='base_timevarying.json')
-    # parser.add_argument("--expname", type=str, default="finetune_VAE_recon_triplanes", help="Experiment name")
-    # parser.add_argument("--description", type=str, default="", help="Description to experiment")
-    parser.add_argument('--resume_training_dir_path', type=str, default=None)
-    parser.add_argument('--resume_training_model_name', type=str, default=None)
+    parser.add_argument("--expdir", type=str, default="logs/shadows_subset_training_chameleon/20251003-002117")
+    parser.add_argument("--description", type=str, default="", help="Description to experiment")
+    
     # parser.add_argument('--only_finetune_mlp', action='store_true')
-    parser.add_argument('--freeze_mlp', action='store_true')
+    # parser.add_argument('--freeze_mlp', action='store_true')
     parser.add_argument('--optimizer_type', type=str, default="Adam")
     parser.add_argument('--use_native_mlp', action='store_true')
-    parser.add_argument('--epoch', type=int, default=15000)
     
     parser.add_argument('--dims', type=int, nargs=3, default=[256, 256, 256])
     parser.add_argument('--dtype', type=str, default='float32')
@@ -79,7 +81,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # create directory for saving logs
-    run_dir = args.resume_training_dir_path
+    run_dir = args.expdir
     logging_file_md = 'a'
     
     # create tensorboard logger
@@ -96,10 +98,8 @@ if __name__ == "__main__":
     # to suppress matplotlib logging
     logging.getLogger('matplotlib').setLevel(logging.WARNING)
     
-    console_logger.debug("Resume Training Directory Path: " + args.resume_training_dir_path)
-    console_logger.debug("Resume Training Model Name: " + args.resume_training_model_name)
+    console_logger.debug("Experiment description: " + args.description)
     console_logger.debug("Config File Name: " + args.config)
-    console_logger.debug("Freeze mlp: " + str(args.freeze_mlp))
     console_logger.debug("Optimizer Type: " + args.optimizer_type)
     console_logger.debug("Use Native MLP: " + str(args.use_native_mlp))
     console_logger.debug("Path to Raw Data File: " + args.raw_data_file_path)
@@ -110,15 +110,17 @@ if __name__ == "__main__":
         config = json.load(f)
     config = edict(config)
     # assert len(config.fixmlp) > 0
-
-    loaded_model = torch.load(os.path.join(args.resume_training_dir_path, args.resume_training_model_name))
     
+    sampler = create_sampler("structuredRegular", "cuda", dims=args.dims, dtype=args.dtype, n_channels=1, filename=args.raw_data_file_path)
+
     with open(args.sampled_lighting_dirs_path, 'r') as f:
         sampled_lighting_dirs = json.load(f)
+    # in cartesian
     sampled_lighting_dirs = np.array(sampled_lighting_dirs).reshape(-1, 3)
     
     n_instances = sampled_lighting_dirs.shape[0]
-        
+    console_logger.debug("Number of instances: " + str(n_instances))
+
     if args.use_native_mlp:
         net = Network(
             d_in=config.channel,
@@ -133,8 +135,11 @@ if __name__ == "__main__":
                     n_hidden_layers=config.n_layers, n_neurons=config.n_hid,
                     activation="ReLU", output_activation="None")
     
-    # print("check net's parameters()")
-    # import pdb; pdb.set_trace()
+    loaded_pretrained_mlp = torch.load(os.path.join(run_dir, "pretrained_mlp.ckpt"))
+    net.load_state_dict(loaded_pretrained_mlp['net_state_dict'])
+    
+    # TODO: might need to support create triplanes by batch later
+    # like in the subset training script
     # instantiate multiple triplanes (each timestep has its own triplane)
     triplane = [Triplane(
         reso=config.resolution // (2 ** len(config.c2f_scale)),
@@ -145,18 +150,10 @@ if __name__ == "__main__":
     print(f"Number of instances: {n_instances}")
     triplane = nn.ModuleList(triplane)
 
-    net.load_state_dict(loaded_model['net_state_dict'])
-    # triplane.load_state_dict(loaded_model['triplane_state_dict'])
-    
-    # TODO: make sure whether I should use optimizer from pretrained triplane?
-    # Caution: also need to pass optimizer_type for resuming training from ckpt
-    
-    if args.freeze_mlp:
-        optimizer = create_optimizer(None, triplane, config, args.optimizer_type)
-    else:
-        optimizer = create_optimizer(net, triplane, config, args.optimizer_type)
-    
-    sampler = create_sampler("structuredRegular", "cuda", dims=args.dims, dtype=args.dtype, n_channels=1, filename=args.raw_data_file_path)
+    optimizer = create_optimizer(None, triplane, config, args.optimizer_type)
+    # freeze MLP
+    for p in net.parameters():
+        p.requires_grad = False
     
     # prepare dataset
     train_dataloader = torch.utils.data.DataLoader(
@@ -172,21 +169,21 @@ if __name__ == "__main__":
     
     value_range = train_dataloader.dataset.value_range
     
-    start_iter = loaded_model['epoch']
+    start_iter = 0
 
-    for epoch in tqdm(range(start_iter+1, args.epoch + 1)):
+    for epoch in tqdm(range(start_iter+1, config.max_iters + 1)):
         
         running_loss = 0.0
         
         # loss_list = []
 
         # for debugging
-        if epoch % 2000 == 0:
+        if epoch % vis_triplane_freq == 0:
             for dim in range(3):
                 plot_single_channel(
-                    triplane[5].triplane[0][dim][16].detach(), 
-                    title=f"plane_dim_{dim}_epoch_{epoch}",
-                    save_path=os.path.join(run_dir, f"plane_dim_{dim}_epoch_{epoch}.png")
+                    triplane[check_plane_idx].triplane[0][dim][16].detach(), 
+                    title=f"plane_additional_dim_{dim}_epoch_{epoch}",
+                    save_path=os.path.join(run_dir, f"plane_additional_dim_{dim}_epoch_{epoch}.png")
                 )
 
         if epoch in config.c2f_scale:
@@ -194,17 +191,14 @@ if __name__ == "__main__":
             # for debugging
             for dim in range(3):
                 plot_single_channel(
-                    triplane[5].triplane[0][dim][16].detach(), 
-                    title=f"plane_dim_{dim}_reso_{new_reso}",
-                    save_path=os.path.join(run_dir, f"plane_dim_{dim}_reso_{new_reso}.png")
+                    triplane[check_plane_idx].triplane[0][dim][16].detach(), 
+                    title=f"plane_additional_dim_{dim}_reso_{new_reso}",
+                    save_path=os.path.join(run_dir, f"plane_additional_dim_{dim}_reso_{new_reso}.png")
                 )
             for tri in triplane:
                 tri.update_resolution(new_reso)
-            if args.freeze_mlp:
-                optimizer = create_optimizer(None, triplane, config, args.optimizer_type)
-            else:
-                optimizer = create_optimizer(net, triplane, config, args.optimizer_type)    
-            update_lr(optimizer, epoch - 1, args.epoch, start_iter)
+            optimizer = create_optimizer(None, triplane, config, args.optimizer_type)
+            update_lr(optimizer, epoch - 1, config)
             torch.cuda.empty_cache()
             console_logger.debug(f"Peak memory usage at epoch {epoch}: allocated: {torch.cuda.memory.max_memory_allocated() / 1024**3} reserved: {torch.cuda.memory.max_memory_reserved() / 1024**3}")
 
@@ -258,7 +252,7 @@ if __name__ == "__main__":
         print(f"Epoch {epoch}, Loss: {avg_loss}, , Reconstruction PSNR: {(PSNR_value):0,.4f}")
         tensorboard_writer.add_scalar("Loss/Train", avg_loss, epoch)
         tensorboard_writer.add_scalar("Loss/Train_PSNR", PSNR_value, epoch)
-        update_lr(optimizer, epoch, args.epoch, start_iter)
+        update_lr(optimizer, epoch, config)
         print(f"Mem Alloc: {torch.cuda.memory_allocated() / 1024**3:.2f} GB / Reserved: {torch.cuda.memory_reserved() / 1024**3:.2f} GB / Max Alloc: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB / Max Reserved: {torch.cuda.max_memory_reserved() / 1024**3:.2f} GB")
 
     for param_group in optimizer.param_groups:
@@ -274,11 +268,11 @@ if __name__ == "__main__":
     torch.save({
                     'net_state_dict': net.state_dict(),
                     'triplane_state_dict': triplane.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
+                    # 'optimizer_state_dict': optimizer.state_dict(),
                     'light_dir_spherical': train_dataloader.dataset.light_dir_spherical.tolist(),
                     'light_dir_cartesian': train_dataloader.dataset.light_dir_cartesian.tolist(),
                     'lr_net': final_lr_net,
                     'lr_tri': final_lr_tri,
                     'epoch': epoch,
-                }, os.path.join(run_dir, f"triplane_model_{epoch}_with_more_triplanes.ckpt"))
+                }, os.path.join(run_dir, f"triplane_model_additional.ckpt"))
     console_logger.debug(f"Peak memory usage: allocated: {torch.cuda.memory.max_memory_allocated() / 1024**3} reserved: {torch.cuda.memory.max_memory_reserved() / 1024**3}")
