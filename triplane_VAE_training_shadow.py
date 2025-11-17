@@ -14,16 +14,16 @@ import importlib
 from autoencoder_2D_origin import VAE_no_KL
 from timevarying_data_helper import LatentWeightDataset
 from fit_triplane.visualize_triplane import plot_single_channel
-from torchmetrics.image import MultiScaleStructuralSimilarityIndexMeasure
-from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+# from torchmetrics.image import MultiScaleStructuralSimilarityIndexMeasure
+# from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 from fit_triplane.fit import Triplane, Network
 from easydict import EasyDict as edict
 import json
 from timevarying_data_helper import SampleShadowVolumesDataset
 
-check_plane_idx = 50
-vis_triplane_freq = 100
+check_plane_idx = 40
+vis_triplane_freq = 50
 regenerate_sampled_points_freq = 10
 
 def parse_args():
@@ -53,6 +53,8 @@ def parse_args():
 
     parser.add_argument("--pretrained_triplane_file_path", type=str, default="fit_triplane/ch_32_saved_model.ckpt", help="File Path to Pretrained Triplanes Model")
     parser.add_argument("--geometry_loss_sample_size", type=int, default=2**10, help="Sample batch size for calculating geometry loss")
+    
+    parser.add_argument("--disable_sync_batch_norm", action='store_true')
     return parser.parse_args()
 
 def regenerate_sampled_points(dataset_for_sampling):
@@ -139,7 +141,7 @@ def train_vae(vae_model, train_dataloader, distributed_sampler, optimizer, sched
     
     # TODO: check whether the param is appropriate (i.e., betas)
     # TODO: might need to tweak ms ssim to support DDP later (Pytorch Lightning should support it)
-    ms_ssim = MultiScaleStructuralSimilarityIndexMeasure(kernel_size = 11, betas = (0.8,0.6),data_range=value_range).to(device_id)
+    # ms_ssim = MultiScaleStructuralSimilarityIndexMeasure(kernel_size = 11, betas = (0.8,0.6),data_range=value_range).to(device_id)
     # lpips = LearnedPerceptualImagePatchSimilarity(net_type='squeeze').cuda()
     
     for epoch in range(epochs):
@@ -200,7 +202,8 @@ def train_vae(vae_model, train_dataloader, distributed_sampler, optimizer, sched
                 mse_loss_for_PSNR = mse_loss
                 mse_loss = mse_loss_weight * mse_loss
                 kl_loss = kl_loss_weight * vae_model.module.loss_function(*output)
-                ms_ssim_loss = ms_ssim_loss_weight * (1 - ms_ssim(output[0], raw_data[0]))
+                # ms_ssim_loss = ms_ssim_loss_weight * (1 - ms_ssim(output[0], raw_data[0]))
+                ms_ssim_loss = torch.tensor(0).to(device_id) 
                 # lpips_loss = lpips_loss_weight * lpips(output[0].reshape([-1, 1, output[0].shape[3], output[0].shape[4]]).repeat(1, 3, 1, 1), raw_data[0].reshape([-1, 1, raw_data[0].shape[3], raw_data[0].shape[4]]).repeat(1, 3, 1, 1))
                 # lpips_loss = lpips_loss_weight * lpips(output[0].reshape([-1, 1, output[0].shape[3], output[0].shape[4]]).expand(-1, 3, -1, -1), raw_data[0].reshape([-1, 1, raw_data[0].shape[3], raw_data[0].shape[4]]).expand(-1, 3, -1, -1))
                 lpips_loss = torch.tensor(0).to(device_id)
@@ -372,6 +375,8 @@ if __name__ == "__main__":
                             cfg.feature_size_decoder, cfg.fpn_encoders_layer_dim_idx, cfg.fpn_decoders_layer_dim_idx,
                             cfg.fpn_encoders_down_idx, cfg.fpn_encoders_up_idx, cfg.fpn_decoders_down_idx,
                             cfg.fpn_decoders_up_idx, cfg.block_config).to(device_id)
+    if args.disable_sync_batch_norm == False:
+        vae_model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(vae_model)
     vae_model = DDP(vae_model, device_ids=[device_id])
     
     print(f"After creating VAE: Rank {rank} memory allocated: {torch.cuda.memory_allocated() / (1024 ** 3)}")
@@ -384,7 +389,7 @@ if __name__ == "__main__":
     if args.resume_training_dir and args.resume_model_file_name:
         run_dir = args.resume_training_dir
         logging_file_md = 'a'
-        map_location = {'cuda:%d' % 0: 'cuda:%d' % rank}
+        map_location = {'cuda:%d' % 0: 'cuda:%d' % device_id}
         loaded_ckpt = torch.load(os.path.join(args.resume_training_dir, args.resume_model_file_name), map_location=map_location)
     elif (args.resume_training_dir and not args.resume_model_file_name) or (not args.resume_training_dir and args.resume_model_file_name):
         RuntimeError("Missing resume training directory or model file name to resume training")
@@ -462,7 +467,9 @@ if __name__ == "__main__":
         dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        sampler=distributed_sampler)
+        sampler=distributed_sampler,
+        pin_memory=True,
+        num_workers=8)
     
     # input_tensor = torch.randn(2, 3, 32, 128, 128).cuda()
     input_tensor = next(iter(train_dataloader))[0].to(device_id)
