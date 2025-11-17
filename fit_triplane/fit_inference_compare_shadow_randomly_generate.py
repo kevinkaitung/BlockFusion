@@ -65,49 +65,49 @@ def inference(dataset, data_res, chunk_size, value_range, triplane, net, instanc
     # from torchmetrics.functional.image import structural_similarity_index_measure
     with torch.no_grad():
         ### section to evaluate the whole volume
-        for batch_idx in tqdm(range(len(dataset))):
-        # hacky way to only evaluate one instance
-        # if True:
-        #     batch_idx = 100
-            # preds = []
-            # targets = []
-            # print("before generate coords_chunk: allocated:", torch.cuda.memory.memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.memory_reserved() / 1024**3)
-            total_sq_error = 0.0
-            total_count = 0
-            this_batch_triplane = triplane[batch_idx].cuda()
-            for coord_chunk in generate_grid_coords_chunks(data_res, chunk_size):
-                # print(f"{batch_idx}:before allocated:", torch.cuda.memory.memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.memory_reserved() / 1024**3)
-                # preds.append(net(this_batch_triplane(coord_chunk, 0)))
-                # targets.append(dataset.decode_ith_shadow_volume(batch_idx, coord_chunk)[2])
-                preds = net(this_batch_triplane(coord_chunk, 0))
-                targets = dataset.decode_ith_shadow_volume(batch_idx, coord_chunk)[2]
-                # sum of squared errors for this chunk
-                sq_error = F.mse_loss(preds, targets, reduction="sum")
-                total_sq_error += sq_error.item()
-                total_count += targets.numel()
+        # for batch_idx in tqdm(range(len(dataset))):
+        # # hacky way to only evaluate one instance
+        # # if True:
+        # #     batch_idx = 100
+        #     # preds = []
+        #     # targets = []
+        #     # print("before generate coords_chunk: allocated:", torch.cuda.memory.memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.memory_reserved() / 1024**3)
+        #     total_sq_error = 0.0
+        #     total_count = 0
+        #     this_batch_triplane = triplane[batch_idx].cuda()
+        #     for coord_chunk in generate_grid_coords_chunks(data_res, chunk_size):
+        #         # print(f"{batch_idx}:before allocated:", torch.cuda.memory.memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.memory_reserved() / 1024**3)
+        #         # preds.append(net(this_batch_triplane(coord_chunk, 0)))
+        #         # targets.append(dataset.decode_ith_shadow_volume(batch_idx, coord_chunk)[2])
+        #         preds = net(this_batch_triplane(coord_chunk, 0))
+        #         targets = dataset.decode_ith_shadow_volume(batch_idx, coord_chunk)[2]
+        #         # sum of squared errors for this chunk
+        #         sq_error = F.mse_loss(preds, targets, reduction="sum")
+        #         total_sq_error += sq_error.item()
+        #         total_count += targets.numel()
                 
-                # print(f"{batch_idx}:after allocated:", torch.cuda.memory.memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.memory_reserved() / 1024**3)
-            # outputs = net(triplane[batch_idx](coords, 0))
-            # outputs = outputs.view(raw_data.shape)
-            loss = total_sq_error / total_count
+        #         # print(f"{batch_idx}:after allocated:", torch.cuda.memory.memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.memory_reserved() / 1024**3)
+        #     # outputs = net(triplane[batch_idx](coords, 0))
+        #     # outputs = outputs.view(raw_data.shape)
+        #     loss = total_sq_error / total_count
             
-            this_batch_triplane = this_batch_triplane.cpu()
-            # outputs = torch.cat(preds, dim=0)
-            # targets = torch.cat(targets, dim=0)
-            # loss = F.mse_loss(outputs, targets)
-            # PSNR = (20 * torch.log10(value_range / torch.sqrt(loss))).cpu()
-            PSNR = (20 * np.log10(value_range / np.sqrt(loss)))
-            psnr_list.append(PSNR)
-            print(f"idx:{batch_idx} PSNR eval on the whole volume:{PSNR}")
-            # ssim_list.append(structural_similarity_index_measure(outputs, raw_data, data_range=1.0).item())
-            # print("after loss calculation: allocated:", torch.cuda.memory.memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.memory_reserved() / 1024**3)
-            # if batch_idx in instances_to_store:
-            #     outputs.detach().cpu().numpy().astype(np.float32).tofile(f"{filename_prefix}_recons_at_instance_{batch_idx}.bin")
-            #     targets.detach().cpu().numpy().astype(np.float32).tofile(f"raw_volume_at_instance_{batch_idx}.bin")
-            # save the GPU memory 
-            # del outputs, targets, loss
-            # torch.cuda.empty_cache()
-            # print("after deleting: allocated:", torch.cuda.memory.memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.memory_reserved() / 1024**3)
+        #     this_batch_triplane = this_batch_triplane.cpu()
+        #     # outputs = torch.cat(preds, dim=0)
+        #     # targets = torch.cat(targets, dim=0)
+        #     # loss = F.mse_loss(outputs, targets)
+        #     # PSNR = (20 * torch.log10(value_range / torch.sqrt(loss))).cpu()
+        #     PSNR = (20 * np.log10(value_range / np.sqrt(loss)))
+        #     psnr_list.append(PSNR)
+        #     print(f"idx:{batch_idx} PSNR eval on the whole volume:{PSNR}")
+        #     # ssim_list.append(structural_similarity_index_measure(outputs, raw_data, data_range=1.0).item())
+        #     # print("after loss calculation: allocated:", torch.cuda.memory.memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.memory_reserved() / 1024**3)
+        #     # if batch_idx in instances_to_store:
+        #     #     outputs.detach().cpu().numpy().astype(np.float32).tofile(f"{filename_prefix}_recons_at_instance_{batch_idx}.bin")
+        #     #     targets.detach().cpu().numpy().astype(np.float32).tofile(f"raw_volume_at_instance_{batch_idx}.bin")
+        #     # save the GPU memory 
+        #     # del outputs, targets, loss
+        #     # torch.cuda.empty_cache()
+        #     # print("after deleting: allocated:", torch.cuda.memory.memory_allocated() / 1024**3, " reserved:", torch.cuda.memory.memory_reserved() / 1024**3)
         ### section end
         ### section to only evaluate on sampled coords
         for batch_idx in tqdm(range(len(dataset))):
@@ -129,7 +129,8 @@ def inference(dataset, data_res, chunk_size, value_range, triplane, net, instanc
             psnr_fast_list.append(PSNR)
             print(f"idx:{batch_idx} PSNR eval only on sampled coords:{PSNR}")
         ### section end
-    return psnr_list, psnr_fast_list
+    # return psnr_list, psnr_fast_list
+    return psnr_fast_list
 
 if __name__ == "__main__":
 
@@ -182,6 +183,7 @@ if __name__ == "__main__":
     
     psnr_lists = []
     psnr_fast_lists = []
+    light_dir_lists = []
     for config_file_path, triplane_file_path, recon_type in zip(args.configs, args.triplane_file_paths, args.triplane_recon_types):
         
         loaded_model = torch.load(triplane_file_path, map_location="cpu")
@@ -228,9 +230,11 @@ if __name__ == "__main__":
 
         net.load_state_dict(loaded_model['net_state_dict'])
         triplane.load_state_dict(loaded_model['triplane_state_dict'])
-        psnr_list, psnr_fast_list = inference(dataset, data_res, chunk_size, value_range, triplane, net, args.instances_to_store, recon_type)
+        # psnr_list, psnr_fast_list = inference(dataset, data_res, chunk_size, value_range, triplane, net, args.instances_to_store, recon_type)
+        psnr_list = inference(dataset, data_res, chunk_size, value_range, triplane, net, args.instances_to_store, recon_type)
         psnr_lists.append(psnr_list)
-        psnr_fast_lists.append(psnr_fast_list)
+        light_dir_lists.append(loaded_model['light_dir_cartesian'])
+        # psnr_fast_lists.append(psnr_fast_list)
     
     # refactor for various #instances
     max_instances = max(len(lst) for lst in psnr_lists)
@@ -249,7 +253,8 @@ if __name__ == "__main__":
     plt.figure(figsize=(10, 6))
     for idx in range(len(psnr_lists)):
         plt.plot(range(len(psnr_lists[idx])), psnr_lists[idx], label=f'{args.triplane_recon_types[idx]} PSNR (avg: {np.mean(np.stack(psnr_lists[idx])):0,.4f})')
-        plt.plot(range(len(psnr_fast_lists[idx])), psnr_fast_lists[idx], label=f'{args.triplane_recon_types[idx]} fast PSNR (avg: {np.mean(np.stack(psnr_fast_lists[idx])):0,.4f})')
+        print(f'{args.triplane_recon_types[idx]} PSNR (avg: {np.mean(np.stack(psnr_lists[idx])):0,.4f})')
+        # plt.plot(range(len(psnr_fast_lists[idx])), psnr_fast_lists[idx], label=f'{args.triplane_recon_types[idx]} fast PSNR (avg: {np.mean(np.stack(psnr_fast_lists[idx])):0,.4f})')
     plt.xlabel('Instance')
     plt.ylabel('PSNR (dB)')
     plt.title('PSNR across Instances')
@@ -257,6 +262,14 @@ if __name__ == "__main__":
     plt.legend()
     plt.savefig(f'{args.result_plot_name}.png')
     plt.close()
+    
+    info_json = dict()
+    for idx in range(len(psnr_lists)):
+        info_json[f'{args.triplane_recon_types[idx]}'] = dict()
+        info_json[f'{args.triplane_recon_types[idx]}']['light_dir_cartesian'] = light_dir_lists[idx]
+        info_json[f'{args.triplane_recon_types[idx]}']['PSNR_recon_quality'] = psnr_lists[idx]
+    with open(f"{args.result_plot_name}.json", "w") as f:
+        json.dump(info_json, f, indent=4)
     
     # import math
     # # for plot sampled lighting directions
