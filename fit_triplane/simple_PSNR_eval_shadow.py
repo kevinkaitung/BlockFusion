@@ -9,6 +9,20 @@ import json
 from fit import Triplane, Network
 import matplotlib.pyplot as plt
 from pysampler import create_sampler, decode_shadow
+from fit_shadow_randomly_generate import MLP_TCNN
+
+# for debug
+def only_decode_raw_shadow(sampler, data_res, chunk_size, tfn_file_path, angle=[0.5, 0.5]):
+    targets = []
+    for coord_chunk in generate_coords_chunks(data_res, chunk_size):
+        target = torch.empty([coord_chunk.shape[0], 1]).float().cuda()
+        decode_shadow(sampler, coord_chunk, target, angle, tfn_file_path)
+        targets.append(target)
+    
+    targets = torch.cat(targets, dim=0)
+    
+    # targets.detach().cpu().numpy().astype(np.float32).tofile(f"test_shadow_volume.bin")
+    return targets
 
 def generate_coords_chunks(data_res, chunk_size, device='cuda'):
     """Yield chunks of coordinates from the full 3D grid."""
@@ -62,25 +76,31 @@ if __name__ == "__main__":
     parser.add_argument('--dtype', type=str, default='float32')
     parser.add_argument('--raw_data_file_path', type=str, default="/media/data/qadwu/volume/vortices/vorts1.data")
     parser.add_argument('--tfn_file_path', type=str, default="/home/kctung/Projects/instant-vnr-pytorch/bindings/ovr/data/configs/vorts_shadow.json")
-    parser.add_argument('--n_instances', type=int, default=150, help="Number of shadow volumes to generate")
+    
     args = parser.parse_args()
 
     with open(args.config, 'r') as f:
         config = json.load(f)
     config = edict(config)
     
-    n_instances = args.n_instances
     # data_res = [128, 128, 128]
     data_res = args.dims
     chunk_size = 65536*192
 
-    net = Network(
-        d_in=config.channel,
-        d_hid=config.n_hid,
-        n_layers=config.n_layers,
-        d_out=config.n_labels,
-        init_type="geo_init",
-    ).cuda()
+    loaded_model = torch.load(args.triplane_file_path)
+    n_instances = len(loaded_model['light_dir_cartesian'])
+
+    # net = Network(
+    #     d_in=config.channel,
+    #     d_hid=config.n_hid,
+    #     n_layers=config.n_layers,
+    #     d_out=config.n_labels,
+    #     init_type="geo_init",
+    # ).cuda()
+    
+    net = MLP_TCNN(n_input_dims=config.channel, n_output_dims=config.n_labels,
+            n_hidden_layers=config.n_layers, n_neurons=config.n_hid,
+            activation="ReLU", output_activation="None")
 
     # instantiate multiple triplanes (each instance has its own triplane)
     triplane = [Triplane(
@@ -96,16 +116,11 @@ if __name__ == "__main__":
     
     sampler = create_sampler("structuredRegular", "cuda", dims=args.dims, dtype=args.dtype, n_channels=1, filename=args.raw_data_file_path)
     
-    loaded_model = torch.load(args.triplane_file_path)
-    # TODO: number of triplanes in loaded model should match #instances, but currently need to manually get the desired triplane
-    # should tweak diffusion inference to generate any number of triplane instances at once, then feed into here
-    import pdb; pdb.set_trace()
-    # TODO: see where to receive lighting direction, and number of lighting dirs should also match #instances
-    light_dirs = [[0.641, 0.907]]
-
     net.load_state_dict(loaded_model['net_state_dict'])
     triplane.load_state_dict(loaded_model['triplane_state_dict'])
-    psnr_list = inference(args.n_instances, data_res, chunk_size, value_range, triplane, net, light_dirs, args.tfn_file_path)
+    
+    import pdb; pdb.set_trace()
+    psnr_list = inference(n_instances, data_res, chunk_size, value_range, triplane, net, light_dirs, args.tfn_file_path)
     
     print(psnr_list)
     
