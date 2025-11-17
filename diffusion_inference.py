@@ -108,7 +108,7 @@ if __name__ == "__main__":
     elif args.sampled_lighting_dirs_path:
         with open(args.sampled_lighting_dirs_path, 'r') as f:
             sampled_lighting_dirs = json.load(f)
-        sampled_lighting_dirs = np.array(sampled_lighting_dirs)
+        sampled_lighting_dirs = np.array(sampled_lighting_dirs["light_dir_cartesian"])
         shadow_meta_dataset = ShadowLightingDirectionsDataset(
             # TODO: see how to select idx
             lighting_dirs=sampled_lighting_dirs.reshape(-1, 3)
