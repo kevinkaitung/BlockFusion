@@ -11,16 +11,23 @@ def plot_single_channel(data, title="Single Channel Plot", cmap='viridis', save_
         cmap: colormap (viridis, gray, jet, etc)
         save_path: if provided, saves the plot to this path
     """
-    plt.figure(figsize=(8, 8))
+    plt.figure(figsize=(7, 7))
     
     # Convert to numpy if tensor
     if torch.is_tensor(data):
         data = data.cpu().numpy()
     
     # Plot with colorbar
-    plt.imshow(data, cmap=cmap)
-    plt.colorbar()
+    im = plt.imshow(data, cmap=cmap)
+    cbar = plt.colorbar()
     plt.title(title)
+    
+    # Increase tick label size
+    plt.xticks(fontsize=16)
+    plt.yticks(fontsize=16)
+    
+    # Set font size for colorbar ticks
+    cbar.ax.tick_params(labelsize=16)
     
     if save_path:
         plt.savefig(save_path)
