@@ -20,7 +20,9 @@ def parse_args():
     parser.add_argument("--model_file_name", type=str, default="vae_model_epoch_9999.ckpt", help="Model file name")
     parser.add_argument("--model_config", type=str, default="model_a", help="Model config file name")
     
+    # for getting min and max of the original triplanes
     parser.add_argument("--pretrained_triplane_file_path", type=str, default="fit_triplane/ch_32_saved_model.ckpt", help="File Path to Pretrained Triplanes Model")
+    parser.add_argument("--original_triplane_file_path", type=str, default="fit_triplane/ch_32_saved_model.ckpt", help="File Path to Pretrained Triplanes Model")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -46,9 +48,17 @@ if __name__ == "__main__":
     n_instances = sum(1 for k in keys if k.endswith("triplane"))
     triplane_weights = [pretrained_triplane_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_instances)]
     triplane_weights = torch.cat(triplane_weights, dim=0)
+    
+    # load original triplane just to get the max and min values used in normalization
+    original_triplane_model = torch.load(args.original_triplane_file_path, map_location="cpu")
+    keys = original_triplane_model['triplane_state_dict'].keys()
+    original_n_instances = sum(1 for k in keys if k.endswith("triplane"))
+    original_triplanes = [original_triplane_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(original_n_instances)]
+    original_triplanes = torch.cat(original_triplanes, dim=0)
     # normalization for training all volumes
-    original_min = triplane_weights.min()
-    original_max = triplane_weights.max()
+    original_min = original_triplanes.min()
+    original_max = original_triplanes.max()
+    
     triplane_weights = (triplane_weights - original_min) / (original_max - original_min)
     triplane_weights = triplane_weights * 2 - 1
     min = -1
