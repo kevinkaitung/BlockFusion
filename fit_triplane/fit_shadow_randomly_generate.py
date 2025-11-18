@@ -29,8 +29,10 @@ if current_dir not in sys.path:
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 from visualize_triplane import plot_single_channel
-from timevarying_data_helper import SampleShadowVolumesDataset, RandomlyGenerateLightDir
+from timevarying_data_helper import SampleShadowVolumesDataset, RandomlyGenerateLightDir, fibonacci_sphere, cartesian_to_spherical_coords
 
+check_plane_idx = 40
+vis_triplane_freq = 2000
 
 def create_optimizer(net, triplane, config, optimizer_type):
     params_to_train = []
@@ -268,6 +270,8 @@ if __name__ == "__main__":
     parser.add_argument('--raw_data_file_path', type=str, default="/media/data/qadwu/volume/vortices/vorts1.data")
     parser.add_argument('--tfn_file_path', type=str, default="/home/kctung/Projects/instant-vnr-pytorch/bindings/ovr/data/configs/vorts_shadow.json")
     parser.add_argument('--n_instances', type=int, default=150, help="Number of shadow volumes to generate")
+    parser.add_argument('--selected_light_dirs_file_path', type=str)
+    parser.add_argument('--output_activation', type=str, default="None")
     args = parser.parse_args()
 
     # create directory for saving logs
@@ -303,16 +307,30 @@ if __name__ == "__main__":
     console_logger.debug("Path to Raw Data File: " + args.raw_data_file_path)
     console_logger.debug("Path to TFN Data File: " + args.tfn_file_path)
     console_logger.debug("Number of Instances Generated: " + str(args.n_instances))
-
-    # if args.only_finetune_mlp:
-    #     console_logger.debug("Only finetune mlp: True")
-    # else:
-        # console_logger.debug("Only finetune mlp: False")
+    if args.selected_light_dirs_file_path:
+        console_logger.debug("Selected Light Directions File Path: " + args.selected_light_dirs_file_path)
+    console_logger.debug("MLP Output Activation: " + args.output_activation)
     
     with open(args.config, 'r') as f:
         config = json.load(f)
     config = edict(config)
     # assert len(config.fixmlp) > 0
+
+    # if selected_light_dirs_file_path is defined, use the light dirs from the file
+    if args.selected_light_dirs_file_path:
+        with open(args.selected_light_dirs_file_path, 'r') as f:
+            selected_light_dirs = json.load(f)
+        # only get n_instances light dirs
+        all_lighting_dirs_cartesian = np.array(selected_light_dirs["light_dir_cartesian"][:args.n_instances])
+        print(f"Check the shape of loaded lighting directions: {all_lighting_dirs_cartesian.shape}")
+    # otherwise, generated n_instances points on Fibonacci Sphere
+    else:
+        # return as np array
+        all_lighting_dirs_cartesian = fibonacci_sphere(args.n_instances, False)
+    all_lighting_dirs_spherical = cartesian_to_spherical_coords(all_lighting_dirs_cartesian)
+    
+    all_lighting_dirs_cartesian = all_lighting_dirs_cartesian.tolist()
+    all_lighting_dirs_spherical = all_lighting_dirs_spherical.tolist()
 
     if args.use_native_mlp:
         net = Network(
@@ -326,7 +344,7 @@ if __name__ == "__main__":
     else:
         net = MLP_TCNN(n_input_dims=config.channel, n_output_dims=config.n_labels,
                     n_hidden_layers=config.n_layers, n_neurons=config.n_hid,
-                    activation="ReLU", output_activation="None")
+                    activation="ReLU", output_activation=args.output_activation)
     
     # print("check net's parameters()")
     # import pdb; pdb.set_trace()
@@ -365,7 +383,8 @@ if __name__ == "__main__":
             sampler=sampler,
             n_instances=args.n_instances,
             tfn=args.tfn_file_path,
-            sample_batch_size=config.sample_batch_size
+            sample_batch_size=config.sample_batch_size,
+            light_dir_cartesian=all_lighting_dirs_cartesian
         ),
         batch_size=config.batch_size,
         shuffle=True)
@@ -384,10 +403,10 @@ if __name__ == "__main__":
         # loss_list = []
 
         # for debugging
-        if epoch % 2000 == 0:
+        if epoch % vis_triplane_freq == 0:
             for dim in range(3):
                 plot_single_channel(
-                    triplane[50].triplane[0][dim][16].detach(), 
+                    triplane[check_plane_idx].triplane[0][dim][16].detach(), 
                     title=f"plane_dim_{dim}_epoch_{epoch}",
                     save_path=os.path.join(run_dir, f"plane_dim_{dim}_epoch_{epoch}.png")
                 )
@@ -397,7 +416,7 @@ if __name__ == "__main__":
             # for debugging
             for dim in range(3):
                 plot_single_channel(
-                    triplane[50].triplane[0][dim][16].detach(), 
+                    triplane[check_plane_idx].triplane[0][dim][16].detach(), 
                     title=f"plane_dim_{dim}_reso_{new_reso}",
                     save_path=os.path.join(run_dir, f"plane_dim_{dim}_reso_{new_reso}.png")
                 )
@@ -473,8 +492,8 @@ if __name__ == "__main__":
                     'net_state_dict': net.state_dict(),
                     'triplane_state_dict': triplane.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
-                    'light_dir_spherical': train_dataloader.dataset.light_dir_spherical.tolist(),
-                    'light_dir_cartesian': train_dataloader.dataset.light_dir_cartesian.tolist(),
+                    'light_dir_spherical': all_lighting_dirs_spherical,
+                    'light_dir_cartesian': all_lighting_dirs_cartesian,
                     'lr_net': final_lr_net,
                     'lr_tri': final_lr_tri,
                     'epoch': epoch,
