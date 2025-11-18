@@ -391,8 +391,8 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
         self.light_dir_spherical_normalized = spherical_coords_radiance_to_normalized(self.light_dir_spherical)
         
         # for debug:
-        print("original spherical coords in radiance:", self.light_dir_spherical[:50])
-        print("transformed spherical coords in normalized value:", self.light_dir_spherical_normalized[:50])
+        # print("original spherical coords in radiance:", self.light_dir_spherical[:50])
+        # print("transformed spherical coords in normalized value:", self.light_dir_spherical_normalized[:50])
         self.data_min = 0.0
         self.data_max = 1.0
         self.value_range = self.data_max - self.data_min

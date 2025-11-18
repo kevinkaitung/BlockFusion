@@ -10,6 +10,8 @@ __pycache__
 # images in fit_triplane are for debugging
 fit_triplane/*.png
 fit_triplane/exp_results
+fit_triplane/non_used
+fit_triplane/recon_results
 
 sophia_exp/jobs_log
 sophia_exp
