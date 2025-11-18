@@ -11,12 +11,12 @@ import matplotlib.pyplot as plt
 from pysampler import create_sampler, decode_shadow
 from fit_shadow_randomly_generate import MLP_TCNN
 
-def cartesian_to_spherical_coords(cartesian_coords):
-    x, y, z = cartesian_coords[..., 0], cartesian_coords[..., 1], cartesian_coords[..., 2]
-    r = np.linalg.norm(cartesian_coords, axis=-1)
-    theta = np.arctan2(y, x)             # azimuth
-    phi = np.arccos(z / r)               # polar
-    return np.stack([theta, phi], axis=-1)
+# Add parent directory to sys.path
+# TODO: make it more flexible to call timevarying_data_helper anywhere
+parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+from timevarying_data_helper import cartesian_to_spherical_coords
 
 # for debug
 def only_decode_raw_shadow(sampler, data_res, chunk_size, tfn_file_path, angle=[0.5, 0.5]):
