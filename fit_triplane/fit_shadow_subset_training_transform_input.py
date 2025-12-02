@@ -65,7 +65,8 @@ max_value = sorted_vals[1]
 def inverse_sigmoid(y):
     y = torch.clamp(y, eps, 1 - eps)
     y = torch.log(y / (1 - y))
-    y = (y - min_value) / (max_value - min_value)
+    # for normalizing the value range of inverse sigmoid to 0~1
+    # y = (y - min_value) / (max_value - min_value)
     return y
 
 if __name__ == "__main__":
@@ -302,9 +303,9 @@ if __name__ == "__main__":
             shuffle=True)
             value_range = train_dataloader.dataset.value_range
             # for keeping the original value range of inverse sigmoid
-            # value_range = max_value - min_value
+            value_range = max_value - min_value
             # for normalizing the value range of inverse sigmoid to 0~1
-            value_range = 1 - 0
+            # value_range = 1 - 0
             
             for epoch in tqdm(range(start_epoch + 1, start_epoch + num_epoch_to_reload_new_subset + 1)):
                 
