@@ -21,6 +21,7 @@ if torch.cuda.is_available():
 
 from torch.utils.checkpoint import checkpoint
 from fit_shadow_randomly_generate import Triplane, MLP_TCNN, Network
+from torchmetrics.image import TotalVariation
 
 # Add parent directory to sys.path
 # TODO: make it more flexible to call timevarying_data_helper anywhere
@@ -87,6 +88,7 @@ if __name__ == "__main__":
     parser.add_argument('--n_instances', type=int, default=150, help="Number of shadow volumes to generate")
     parser.add_argument('--selected_light_dirs_file_path', type=str)
     parser.add_argument('--output_activation', type=str, default="None")
+    parser.add_argument('--tv_loss_weight', type=float, default=0.0)
     args = parser.parse_args()
 
     # create directory for saving logs
@@ -306,6 +308,7 @@ if __name__ == "__main__":
             value_range = max_value - min_value
             # for normalizing the value range of inverse sigmoid to 0~1
             # value_range = 1 - 0
+            tv_loss = TotalVariation(reduction='mean').cuda()
             
             for epoch in tqdm(range(start_epoch + 1, start_epoch + num_epoch_to_reload_new_subset + 1)):
                 
@@ -348,6 +351,7 @@ if __name__ == "__main__":
                     
                     # data format: tuple(timestep_index, sample_coords, target_values)
                     outputs = []
+                    triplanes_for_tv_loss = []
                     targets = data[2]
                     # transform the value range with inverse sigmoid
                     targets = inverse_sigmoid(targets)
@@ -355,12 +359,13 @@ if __name__ == "__main__":
                         # the output of TCNN MLP would be half type
                         # convert to float type
                         outputs.append(net(triplane[timestep](sample_coords, 0)).float())
-                        
+                        triplanes_for_tv_loss.append(triplane[timestep].triplane[0])
                     # outputs[0].shape = [1024, 1]
                     outputs = torch.stack(outputs, dim=0)
+                    triplanes_for_tv_loss = torch.cat(triplanes_for_tv_loss, dim=0)
                     # outputs.shape = [90, 1024, 1]
                     # targets.shape = [90, 1024, 1]
-                    loss = F.mse_loss(outputs, targets)
+                    loss = F.mse_loss(outputs, targets) + args.tv_loss_weight * tv_loss(triplanes_for_tv_loss)
 
                     # deleting targets and outputs might not clean up much memory
                     # most of the memory might be consumed by the intermediate results of forward pass
