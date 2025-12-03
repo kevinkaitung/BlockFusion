@@ -313,6 +313,8 @@ if __name__ == "__main__":
             for epoch in tqdm(range(start_epoch + 1, start_epoch + num_epoch_to_reload_new_subset + 1)):
                 
                 running_loss = 0.0
+                running_tv_loss = 0.0
+                running_mse_loss = 0.0
                 
                 # loss_list = []
 
@@ -365,7 +367,11 @@ if __name__ == "__main__":
                     triplanes_for_tv_loss = torch.cat(triplanes_for_tv_loss, dim=0)
                     # outputs.shape = [90, 1024, 1]
                     # targets.shape = [90, 1024, 1]
-                    loss = F.mse_loss(outputs, targets) + args.tv_loss_weight * tv_loss(triplanes_for_tv_loss)
+                    triplane_tv_loss = tv_loss(triplanes_for_tv_loss)
+                    output_mse_loss = F.mse_loss(outputs, targets)
+                    loss = output_mse_loss + args.tv_loss_weight * triplane_tv_loss
+                    # for debugging
+                    # print(f"TV loss before weighting: {triplane_tv_loss.item()}, TV loss after weighting: {args.tv_loss_weight * triplane_tv_loss.item()}")
 
                     # deleting targets and outputs might not clean up much memory
                     # most of the memory might be consumed by the intermediate results of forward pass
@@ -380,18 +386,22 @@ if __name__ == "__main__":
                     # print(f"After step Mem Alloc: {torch.cuda.memory_allocated() / 1024**3:.2f} GB / Reserved: {torch.cuda.memory_reserved() / 1024**3:.2f} GB / Max Alloc: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB / Max Reserved: {torch.cuda.max_memory_reserved() / 1024**3:.2f} GB")
                     
                     running_loss += loss.item()
+                    running_tv_loss += triplane_tv_loss.item()
+                    running_mse_loss += output_mse_loss.item()
                     # del loss
                     # torch.cuda.empty_cache()
                     
                 avg_loss = running_loss / len(train_dataloader)
+                avg_tv_loss = running_tv_loss / len(train_dataloader)
+                avg_mse_loss = running_mse_loss / len(train_dataloader)
                 # loss_list.append(avg_loss)
-                PSNR_value = (20 * np.log10(value_range / np.sqrt(avg_loss))).item()
-                console_logger.debug(f"Subset {offset}, Epoch {epoch}, Loss: {avg_loss}, Reconstruction PSNR: {(PSNR_value):0,.4f}")
-                print(f"Subset {offset}, Epoch {epoch}, Loss: {avg_loss}, , Reconstruction PSNR: {(PSNR_value):0,.4f}")
+                PSNR_value = (20 * np.log10(value_range / np.sqrt(avg_mse_loss))).item()
+                console_logger.debug(f"Subset {offset}, Epoch {epoch}, Total Loss: {avg_loss}, TV Loss (before weighting): {avg_tv_loss}, MSE Loss: {avg_mse_loss}, Reconstruction PSNR: {(PSNR_value):0,.4f}")
+                print(f"Subset {offset}, Epoch {epoch}, Total Loss: {avg_loss}, TV Loss (before weighting): {avg_tv_loss}, MSE Loss: {avg_mse_loss}, Reconstruction PSNR: {(PSNR_value):0,.4f}")
                 tensorboard_writer.add_scalar(f"Loss/Subset_{offset}", avg_loss, epoch)
                 tensorboard_writer.add_scalar(f"PSNR/Subset_{offset}", PSNR_value, epoch)
                 update_lr(optimizer, epoch, config)
-                print(f"Mem Alloc: {torch.cuda.memory_allocated() / 1024**3:.2f} GB / Reserved: {torch.cuda.memory_reserved() / 1024**3:.2f} GB / Max Alloc: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB / Max Reserved: {torch.cuda.max_memory_reserved() / 1024**3:.2f} GB")
+                # print(f"Mem Alloc: {torch.cuda.memory_allocated() / 1024**3:.2f} GB / Reserved: {torch.cuda.memory_reserved() / 1024**3:.2f} GB / Max Alloc: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB / Max Reserved: {torch.cuda.max_memory_reserved() / 1024**3:.2f} GB")
 
             # get the final learning rates of triplane and MLP
             for param_group in optimizer.param_groups:
