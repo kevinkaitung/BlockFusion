@@ -1,15 +1,15 @@
 {
-    "max_iters": 6000,
+    "max_iters": 10000,
     "lr_net": 1e-3,
     "lr_tri": 1e-3,
     "batch_size": 700,
-    "subset_reload_iters": 6000,
+    "subset_reload_iters": 10000,
 
     "n_layers": 4,
     "n_hid": 32,
     "channel": 32,
     "resolution": 128,
-    "c2f_scale": [100,1000,2000,3000,4500],
+    "c2f_scale": [100,1000,3000,4000,5000],
 
     "sample_batch_size": 16384,
 
