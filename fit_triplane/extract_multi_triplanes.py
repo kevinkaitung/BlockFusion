@@ -22,6 +22,7 @@ args = parser.parse_args()
 # indices = [500, 501]
 # indices = [40, 740, 1440]
 indices = [50, 116, 124, 889, 902, 913, 1458, 1476, 1477]
+# indices = [59]
 # indices = [1061]
 
 old_model = torch.load(os.path.join(args.model_dir, args.filename))
