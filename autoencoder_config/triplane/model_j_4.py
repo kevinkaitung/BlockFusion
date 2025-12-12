@@ -1,5 +1,5 @@
-# Note: model created at 7/7,
-# model_i is used to compare to model_g with an extra upsampling block in encoder
+# Note: model created at 11/29,
+# model_j is used to compare to model_g with extra upsampling blocks (back to original resolution) in encoder
 
 # setup VAE model hyperparameters
 vae_config = {
@@ -8,7 +8,7 @@ vae_config = {
             "kl_weight": 1.0, # manually increasing KL-weights if performing KL_annealing
             # 3 planes (xy, yz, xz) * 32 channels (feature vectors) * 128x128
             "plane_shape": [3, 32, 128, 128],
-            "z_shape": [4, 64, 64],
+            "z_shape": [4, 128, 128],
             "num_heads": 16,
             "transform_depth": 1
             }
@@ -16,35 +16,35 @@ vae_config = {
 # encoder_in_channels = 64
 #                   idx:0,   1,   2,   3,   4,  5,   6,  7,     8,     9
 # encoder_dims =         [32, 64, 128, 256, 512, 1024, 512, 256, 128,  2 * vae_config["z_shape"][0]]
-encoder_dims =         [128, 256, 512, 1024, 1024, 1024, 1024, 1024, 512,  2 * vae_config["z_shape"][0]]
-feature_size_encoder = [128,  64,  32,   16,    8,    4,    8,   16,   32,  vae_config["z_shape"][1]]
+encoder_dims =         [128, 256, 512, 1024, 512, 256,  2 * vae_config["z_shape"][0]]
+feature_size_encoder = [128,  64,  32,   16,  32,  64,  vae_config["z_shape"][1]]
 # Note: None is just the placeholder to keep index align with other arrays
-encoder_use_transformers = [None, False, True, True, True, True, True, True,   True, False]
-encoder_use_resblocks = [None, True, False, False, False, False, False, False, False, True]
+encoder_use_transformers = [None, False, True, True, True, True, False]
+encoder_use_resblocks = [None, True, False, False, False, False, True]
 encoder_num_resblocks = 1
 
-encoders_down_end_idx = 5
-encoders_up_end_idx = 9
+encoders_down_end_idx = 3
+encoders_up_end_idx = 6
 
 # decoder_in_channels = 128
-decoder_dims =         [256, 512,  1024, 1024, 1024, 1024, 1024, 512, 256, vae_config["plane_shape"][1]]
-feature_size_decoder = [64,   32,   16,    8,    4,    8,   16,  32,   64, vae_config["plane_shape"][2]]
-decoder_use_transformers = [None, True, True, True, True, True, True, True, True, False]
-decoder_use_resblocks = [None, False, False, False, False, False, False, False, False, True]
+decoder_dims =         [128, 256, 512, 1024, 512, 256, vae_config["plane_shape"][1]]
+feature_size_decoder = [128,  64,  32,   16,  32,  64, vae_config["plane_shape"][2]]
+decoder_use_transformers = [None, True, True, True, True, True, False]
+decoder_use_resblocks = [None, False, False, False, False, False, True]
 decoder_num_resblocks = 1
 
-decoders_down_end_idx = 4
-decoders_up_end_idx = 9
+decoders_down_end_idx = 3
+decoders_up_end_idx = 6
 
 # these indices index for encoder_dims/decoder_dims
-fpn_encoders_layer_dim_idx = [1, 2, 3, 4]
-fpn_decoders_layer_dim_idx = [0, 1, 2, 3]
+fpn_encoders_layer_dim_idx = []
+fpn_decoders_layer_dim_idx = []
 
 # these indices index for the group of blocks (i.e., encoders_down, ...) in block_config
-fpn_encoders_down_idx = [0, 1, 2, 3]
-fpn_encoders_up_idx = [1, 2, 3]
-fpn_decoders_down_idx = [-1, 0, 1, 2]
-fpn_decoders_up_idx = [2, 3, 4]
+fpn_encoders_down_idx = []
+fpn_encoders_up_idx = []
+fpn_decoders_down_idx = []
+fpn_decoders_up_idx = []
 
 block_config = {}
 
