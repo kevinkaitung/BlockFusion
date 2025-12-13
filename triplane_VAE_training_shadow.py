@@ -440,11 +440,23 @@ if __name__ == "__main__":
     keys = loaded_model['triplane_state_dict'].keys()
     n_instances = sum(1 for k in keys if k.endswith("triplane"))
     triplane_weights = [loaded_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_instances)]
-    triplane_weights = torch.cat(triplane_weights, dim=0)
+    # don't concatenate all tensors if triplane_weights are huge in size
+    # triplane_weights = torch.cat(triplane_weights, dim=0)
+    
+    # need to manually calculate the min, max of all triplanes
+    # init value for triplane min, max
+    original_triplane_min = 200
+    original_triplane_max = -200
+    for idx in range(n_instances):
+        if triplane_weights[idx].min() < original_triplane_min:
+            original_triplane_min = triplane_weights[idx].min()
+        if triplane_weights[idx].max() > original_triplane_max:
+            original_triplane_max = triplane_weights[idx].max()
     
     # clean to save more space
+    loaded_model.clear()
     del loaded_model
-    torch.cuda.empty_cache()
+    # torch.cuda.empty_cache()
     
     # normalize triplane value to -1, 1
     # normalization for training only one volume
@@ -452,14 +464,22 @@ if __name__ == "__main__":
     # triplane_weights[50:51][0] = triplane_weights[50:51][0] * 2 - 1
     
     # normalization for training all volumes
-    original_triplane_min = triplane_weights.min()
-    original_triplane_max = triplane_weights.max()
-    triplane_weights = (triplane_weights - original_triplane_min) / (original_triplane_max - original_triplane_min)
-    triplane_weights = triplane_weights * 2 - 1
+    # original_triplane_min = triplane_weights.min()
+    # original_triplane_max = triplane_weights.max()
+    # triplane_weights = (triplane_weights - original_triplane_min) / (original_triplane_max - original_triplane_min)
+    # triplane_weights = triplane_weights * 2 - 1
+    
+    # normalize each triplane one by one
+    for idx in range(n_instances):
+        triplane_weights[idx].sub_(original_triplane_min)
+        triplane_weights[idx].div_(original_triplane_max - original_triplane_min)
+        triplane_weights[idx].mul_(2).sub_(1)
     
     dataset = LatentWeightDataset(
         triplane_weights,
-        cfg.vae_config["plane_shape"])
+        cfg.vae_config["plane_shape"],
+        original_triplane_min,
+        original_triplane_max)
     
     distributed_sampler = torch.utils.data.distributed.DistributedSampler(dataset)
     
@@ -469,7 +489,9 @@ if __name__ == "__main__":
         shuffle=False,
         sampler=distributed_sampler,
         pin_memory=True,
-        num_workers=8)
+        # avoid the error of using too large pretrained triplanes
+        # num_workers=8
+        )
     
     # input_tensor = torch.randn(2, 3, 32, 128, 128).cuda()
     input_tensor = next(iter(train_dataloader))[0].to(device_id)

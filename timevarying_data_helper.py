@@ -474,13 +474,19 @@ class EncodingWeightDataset(torch.utils.data.Dataset):
 
 class LatentWeightDataset(torch.utils.data.Dataset):
     def __init__(
-        self, latent_weights, z_shape
+        self, latent_weights, z_shape, min, max
     ):
         self.latent_weights = latent_weights
-        self.n_params = latent_weights.shape[0]
+        # self.n_params = latent_weights.shape[0]
+        self.n_params = len(latent_weights)
+        
+        self.min = min
+        self.max = max
         
         # need to reshape from flatten input back to VAE recieve
-        self.latent_weights = self.latent_weights.reshape([self.n_params] + [z_shape[idx] for idx in range(len(z_shape))])
+        # self.latent_weights = self.latent_weights.reshape([self.n_params] + [z_shape[idx] for idx in range(len(z_shape))])
+        for idx in range(self.n_params):
+            self.latent_weights[idx] = self.latent_weights[idx].reshape([z_shape[idx] for idx in range(len(z_shape))])
         
     def __getitem__(self, index):
         return self.latent_weights[index], index
@@ -489,7 +495,8 @@ class LatentWeightDataset(torch.utils.data.Dataset):
         return self.n_params
     
     def get_value_range(self):
-        return self.latent_weights.min().item(), self.latent_weights.max().item()
+        # return self.latent_weights.min().item(), self.latent_weights.max().item()
+        return self.min, self.max
 
 if __name__ == "__main__":
     dataset = TimevaryingDataset(
