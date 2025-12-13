@@ -17,7 +17,7 @@ vae_config = {
 # encoder_in_channels = 64
 #                   idx:0,   1,   2,   3,   4,  5,   6,  7,     8,     9
 # encoder_dims =         [32, 64, 128, 256, 512, 1024, 512, 256, 128,  2 * vae_config["z_shape"][0]]
-encoder_dims =         [ 64, 128, 512, 512, 1024, 1024, 1024, 1024, 1024,  2 * vae_config["z_shape"][0]]
+encoder_dims =         [ 64, 128, 256, 512,  512, 1024, 1024, 1024,  512,  2 * vae_config["z_shape"][0]]
 feature_size_encoder = [256, 128,  64,  32,   16,    8,    4,    8,   16,  vae_config["z_shape"][1]]
 # Note: None is just the placeholder to keep index align with other arrays
 encoder_use_transformers = [None, False, True, True, True, True, True, True, True, False]
@@ -28,8 +28,8 @@ encoders_down_end_idx = 6
 encoders_up_end_idx = 9
 
 # decoder_in_channels = 128
-decoder_dims =         [512,  1024, 1024, 1024, 1024, 1024, 512, 512, 128, vae_config["plane_shape"][1]]
-feature_size_decoder = [ 32,   16,    8,    4,    8,   16,  32,  64,  128, vae_config["plane_shape"][2]]
+decoder_dims =         [512, 512, 1024, 1024, 1024, 512, 512, 512, 128, vae_config["plane_shape"][1]]
+feature_size_decoder = [ 32,  16,    8,    4,    8,  16,  32,  64, 128, vae_config["plane_shape"][2]]
 decoder_use_transformers = [None, True, True, True, True, True, True, True, True, False]
 decoder_use_resblocks = [None, False, False, False, False, False, False, False, False, True]
 decoder_num_resblocks = 1
@@ -40,12 +40,18 @@ decoders_up_end_idx = 9
 # these indices index for encoder_dims/decoder_dims
 fpn_encoders_layer_dim_idx = [2, 3, 4, 5]
 fpn_decoders_layer_dim_idx = [0, 1, 2, 3]
+# fpn_encoders_layer_dim_idx = []
+# fpn_decoders_layer_dim_idx = []
 
 # these indices index for the group of blocks (i.e., encoders_down, ...) in block_config
 fpn_encoders_down_idx = [1, 2, 3, 4]
 fpn_encoders_up_idx = [1, 2]
 fpn_decoders_down_idx = [-1, 0, 1, 2]
 fpn_decoders_up_idx = [1, 2, 3]
+# fpn_encoders_down_idx = []
+# fpn_encoders_up_idx = []
+# fpn_decoders_down_idx = []
+# fpn_decoders_up_idx = []
 
 block_config = {}
 
