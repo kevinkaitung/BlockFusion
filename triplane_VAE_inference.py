@@ -67,7 +67,7 @@ if __name__ == "__main__":
     train_dataloader = torch.utils.data.DataLoader(
         LatentWeightDataset(
         triplane_weights,
-        cfg.vae_config["plane_shape"]),
+        cfg.vae_config["plane_shape"], min, max),
         batch_size=1,
         shuffle=False)
     
