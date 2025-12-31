@@ -3,7 +3,6 @@ import os, pdb, sys, pathlib
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchist
 import numpy as np
 
 # copy from https://github.com/wilsonCernWq/instant-vnr-pytorch/blob/main/core/networks.py
