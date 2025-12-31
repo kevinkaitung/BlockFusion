@@ -15,8 +15,8 @@ import numpy as np
 import os, sys
 import json
 
-if torch.cuda.is_available():
-    import tinycudann as tcnn
+# if torch.cuda.is_available():
+#     import tinycudann as tcnn
 
 from networks import NeurCompNet
 
@@ -144,7 +144,7 @@ if __name__ == "__main__":
 
         # instantiate multiple triplanes (each timestep has its own triplane)
         nets = [
-            NeurCompNet(n_input_dims=3, n_output_dims=config.n_labels, bias=False, n_hidden_layers=config.n_layers, n_neurons=config.n_hid, is_residual=True) 
+            NeurCompNet(n_input_dims=3, n_output_dims=config.n_labels, bias=False, n_hidden_layers=config.n_layers, n_neurons=config.n_hid, is_residual=True).cuda()
             for _ in range(config.batch_size)]
         nets = nn.ModuleList(nets)
         
@@ -190,7 +190,7 @@ if __name__ == "__main__":
         
         # start_epoch = subset_model['epoch']
         nets = [
-            NeurCompNet(n_input_dims=3, n_output_dims=config.n_labels, bias=False, n_hidden_layers=config.n_layers, n_neurons=config.n_hid, is_residual=True) 
+            NeurCompNet(n_input_dims=3, n_output_dims=config.n_labels, bias=False, n_hidden_layers=config.n_layers, n_neurons=config.n_hid, is_residual=True).cuda()
             for _ in range(config.batch_size)]
         nets = nn.ModuleList(nets)
         nets.load_state_dict(subset_model['net_state_dict'])
@@ -205,7 +205,10 @@ if __name__ == "__main__":
             n_instances=config.batch_size,
             tfn=args.tfn_file_path,
             sample_batch_size=config.sample_batch_size,
-            light_dir_cartesian=subset_model['light_dir_cartesian']
+            light_dir_cartesian=subset_model['light_dir_cartesian'],
+            # only specify when you need importance sampling on larger gradient points
+            # resolution=args.dims,
+            # if_gradient=True
         ),
         batch_size=config.batch_size,
         shuffle=True)

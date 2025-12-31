@@ -369,7 +369,8 @@ def fibonacci_sphere(samples=1000, randomize=True):
 
 class RandomlyGenerateLightDir(torch.utils.data.Dataset):
     def __init__(
-        self, sampler, n_instances, tfn, sample_batch_size=2**10, light_dir_spherical=None, light_dir_cartesian=None
+        self, sampler, n_instances, tfn, sample_batch_size=2**10, light_dir_spherical=None, light_dir_cartesian=None,
+        resolution=[None, None, None], if_gradient=False
     ):
         self.sampler = sampler
         self.n_instances = n_instances
@@ -389,6 +390,10 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
                 self.light_dir_spherical = cartesian_to_spherical_coords(self.light_dir_cartesian)
         # convert spherical coords from radiance unit to normalized value (0~1) for using in shadow sampler
         self.light_dir_spherical_normalized = spherical_coords_radiance_to_normalized(self.light_dir_spherical)
+
+        self.if_gradient = if_gradient
+        if if_gradient:
+            self.selected_coord_groups = self.calculate_gradient(resolution)
         
         # for debug:
         # print("original spherical coords in radiance:", self.light_dir_spherical[:50])
@@ -400,8 +405,21 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
     def __getitem__(self, index):
         # generate random coordinates
         # sample_coords: [x_coords, y_coords, z_coords]
-        sample_coords = torch.rand([self.sample_batch_size, 3], dtype=torch.float32, device="cuda")
-        targets = torch.empty((self.sample_batch_size, 1), dtype=torch.float32, device="cuda")
+        
+        if self.if_gradient:
+            selected_idx = torch.randperm(self.selected_coord_groups[index].shape[0])[:self.sample_batch_size]
+            selected_coords = self.selected_coord_groups[index][selected_idx].cuda()
+            
+            # uniformly sample over the whole volume domain
+            sample_coords = torch.rand([1024, 3], dtype=torch.float32, device="cuda")
+            sample_coords = torch.cat([sample_coords, selected_coords], dim=0)
+            
+            targets = torch.empty((sample_coords.shape[0], 1), dtype=torch.float32, device="cuda")
+        else:
+            # uniformly sample over the whole volume domain
+            sample_coords = torch.rand([self.sample_batch_size, 3], dtype=torch.float32, device="cuda")
+            targets = torch.empty((self.sample_batch_size, 1), dtype=torch.float32, device="cuda")
+        
         decode_shadow(self.sampler, sample_coords, targets, self.light_dir_spherical_normalized[index], self.tfn)
         return index, sample_coords, targets
 
@@ -412,6 +430,39 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
         targets = torch.empty((sample_coords.shape[0], 1), dtype=torch.float32, device="cuda")
         decode_shadow(self.sampler, sample_coords, targets, self.light_dir_spherical_normalized[index], self.tfn)
         return index, sample_coords, targets
+    
+    # extended function for calculating gradients and gradients' norm
+    def calculate_gradient(self, resolution):
+        
+        from fit_triplane.data_distribution_analyze import generate_coords_chunks
+        from fit_triplane.calculate_gradient import calculate_gradient
+        
+        chunk_size = 65536*192
+    
+        # grad_norms = []
+        selected_coord_groups = []
+        # need to decode the volume first
+        for idx in range(self.n_instances):
+            targets = []
+            for coord_chunk in generate_coords_chunks(resolution, chunk_size):
+                target = torch.empty([coord_chunk.shape[0], 1]).float().cuda()
+                decode_shadow(self.sampler, coord_chunk, target, self.light_dir_spherical_normalized[idx], self.tfn)
+                targets.append(target.cpu())
+            targets = torch.cat(targets, dim=0)
+            targets = targets.reshape([resolution[2], resolution[1], resolution[0]])
+            
+            # currently only use grad norm
+            _, grad_norm = calculate_gradient(targets)
+            # grad_norms.append(grad_norm)
+            grad_norm_thres = 0.5
+            selected_coords = torch.nonzero(grad_norm > grad_norm_thres)
+            print(f"instance {idx}: {selected_coords.shape[0]} points passing the gradient norm threshold")
+            # swap the 1st and 3rd col ((z, y, x) -> (x, y, z))
+            selected_coords[:, [0, 2]] = selected_coords[:, [2, 0]]
+            selected_coord_groups.append(selected_coords)
+            
+        return selected_coord_groups
+        
 
 class EncodingWeightDataset(torch.utils.data.Dataset):
     def __init__(
