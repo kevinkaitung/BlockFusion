@@ -52,6 +52,45 @@ def update_lr(optimizer, epoch, config):
         if "tri" in param_group['name']:
             param_group['lr'] = config.lr_tri * learning_factor
 
+def training_loop(start_epoch, offset, train_dataloader, value_range, nets, optimizer, config, tensorboard_writer, console_logger):
+    
+    for epoch in tqdm(range(start_epoch + 1, start_epoch + config.max_iters + 1)):
+        
+        running_loss = 0.0
+
+        for batch_idx, data in enumerate(train_dataloader):
+            
+            # data format: tuple(timestep_index, sample_coords, target_values)
+            outputs = []
+            targets = data[2]
+            for timestep, sample_coords in zip(data[0], data[1]):
+                # the output of TCNN MLP would be half type
+                # convert to float type
+                outputs.append(nets[timestep](sample_coords).float())
+                
+            # outputs[0].shape = [1024, 1]
+            outputs = torch.stack(outputs, dim=0)
+            # outputs.shape = [90, 1024, 1]
+            # targets.shape = [90, 1024, 1]
+            loss = F.mse_loss(outputs, targets)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
+            running_loss += loss.item()
+            
+        avg_loss = running_loss / len(train_dataloader)
+        PSNR_value = (20 * np.log10(value_range / np.sqrt(avg_loss))).item()
+        console_logger.debug(f"Subset {offset}, Epoch {epoch}, Loss: {avg_loss}, Reconstruction PSNR: {(PSNR_value):0,.4f}")
+        print(f"Subset {offset}, Epoch {epoch}, Loss: {avg_loss}, , Reconstruction PSNR: {(PSNR_value):0,.4f}")
+        tensorboard_writer.add_scalar(f"Loss/Subset_{offset}", avg_loss, epoch)
+        tensorboard_writer.add_scalar(f"PSNR/Subset_{offset}", PSNR_value, epoch)
+        update_lr(optimizer, epoch, config)
+        print(f"Mem Alloc: {torch.cuda.memory_allocated() / 1024**3:.2f} GB / Reserved: {torch.cuda.memory_reserved() / 1024**3:.2f} GB / Max Alloc: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB / Max Reserved: {torch.cuda.max_memory_reserved() / 1024**3:.2f} GB")
+
+    return nets, optimizer, epoch
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
@@ -135,6 +174,31 @@ if __name__ == "__main__":
     assert args.n_instances % config.batch_size == 0, "Number of instances must be divisible by batch size"
     offsets = []
     
+    ### section to pre-optimize a set of SIREN as the initial weights of the rest of the SIREN sets
+    sample_config = edict({
+        "max_iters": 200,
+        "lr_net": 1e-4,
+        "lr_tri": 1e-4
+    })
+    sample_net = nn.ModuleList([NeurCompNet(n_input_dims=3, n_output_dims=config.n_labels, bias=False, n_hidden_layers=config.n_layers, n_neurons=config.n_hid, is_residual=True).cuda()])
+    sample_opt = create_optimizer(sample_net, None, sample_config, args.optimizer_type)
+    sample_dataloader = torch.utils.data.DataLoader(
+        RandomlyGenerateLightDir(
+            sampler=sampler,
+            n_instances=1,
+            tfn=args.tfn_file_path,
+            sample_batch_size=config.sample_batch_size,
+            light_dir_cartesian=all_lighting_dirs_cartesian[:1],
+            # only specify when you need importance sampling on larger gradient points
+            # resolution=args.dims,
+            # if_gradient=True
+        ),
+        batch_size=1,
+        shuffle=True)
+    value_range = sample_dataloader.dataset.value_range
+    sample_net, sample_opt, epoch = training_loop(0, -1, sample_dataloader, value_range, sample_net, sample_opt, sample_config, tensorboard_writer, console_logger)
+    ### section end of pre-optimizing one set of SIREN
+    
     # generate subset ckpt first
     for idx in range(args.n_instances // config.batch_size):
         start_idx = idx * config.batch_size
@@ -143,9 +207,19 @@ if __name__ == "__main__":
         offsets.append(start_idx)
 
         # instantiate multiple triplanes (each timestep has its own triplane)
+        # used when need to set the same weight initialization for all instances
+        # torch.manual_seed(42)
+        # np.random.seed(42)
         nets = [
             NeurCompNet(n_input_dims=3, n_output_dims=config.n_labels, bias=False, n_hidden_layers=config.n_layers, n_neurons=config.n_hid, is_residual=True).cuda()
             for _ in range(config.batch_size)]
+        
+        ### section to iterate through all net in the nets and copy the pre-optimized weights
+        print(f"check the key of pre-optimized net: {sample_net[0].state_dict().keys()}")
+        for net in nets:
+            net.load_state_dict(sample_net[0].state_dict())
+        ### section end of copying pre-optimized weights
+        
         nets = nn.ModuleList(nets)
         
         optimizer = create_optimizer(nets, None, config, args.optimizer_type)
@@ -213,43 +287,9 @@ if __name__ == "__main__":
         batch_size=config.batch_size,
         shuffle=True)
         value_range = train_dataloader.dataset.value_range
-                    
         
-        for epoch in tqdm(range(start_epoch + 1, start_epoch + config.max_iters + 1)):
-            
-            running_loss = 0.0
-
-            for batch_idx, data in enumerate(train_dataloader):
-                
-                # data format: tuple(timestep_index, sample_coords, target_values)
-                outputs = []
-                targets = data[2]
-                for timestep, sample_coords in zip(data[0], data[1]):
-                    # the output of TCNN MLP would be half type
-                    # convert to float type
-                    outputs.append(nets[timestep](sample_coords).float())
-                    
-                # outputs[0].shape = [1024, 1]
-                outputs = torch.stack(outputs, dim=0)
-                # outputs.shape = [90, 1024, 1]
-                # targets.shape = [90, 1024, 1]
-                loss = F.mse_loss(outputs, targets)
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                
-                running_loss += loss.item()
-                
-            avg_loss = running_loss / len(train_dataloader)
-            PSNR_value = (20 * np.log10(value_range / np.sqrt(avg_loss))).item()
-            console_logger.debug(f"Subset {offset}, Epoch {epoch}, Loss: {avg_loss}, Reconstruction PSNR: {(PSNR_value):0,.4f}")
-            print(f"Subset {offset}, Epoch {epoch}, Loss: {avg_loss}, , Reconstruction PSNR: {(PSNR_value):0,.4f}")
-            tensorboard_writer.add_scalar(f"Loss/Subset_{offset}", avg_loss, epoch)
-            tensorboard_writer.add_scalar(f"PSNR/Subset_{offset}", PSNR_value, epoch)
-            update_lr(optimizer, epoch, config)
-            print(f"Mem Alloc: {torch.cuda.memory_allocated() / 1024**3:.2f} GB / Reserved: {torch.cuda.memory_reserved() / 1024**3:.2f} GB / Max Alloc: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB / Max Reserved: {torch.cuda.max_memory_reserved() / 1024**3:.2f} GB")
-
+        nets, optimizer, epoch = training_loop(start_epoch, offset, train_dataloader, value_range, nets, optimizer, config, tensorboard_writer, console_logger)
+        
         # get the final learning rates of MLP
         for param_group in optimizer.param_groups:
             if "net" in param_group['name']:
