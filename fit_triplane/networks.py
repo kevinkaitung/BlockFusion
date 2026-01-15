@@ -5,6 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
+from torch import distributions as dist
+
 # copy from https://github.com/wilsonCernWq/instant-vnr-pytorch/blob/main/core/networks.py
 
 class SineLayer(nn.Module):
@@ -101,3 +103,96 @@ class NeurCompNet(torch.nn.Module):
         x = x.view(-1, self.n_input_dims) * 2 - 1     # to [-1, 1]
         x = self.net(x) * 0.5 + 0.5                   # to [ 0, 1]
         return x.view(*S, self.n_output_dims)
+
+# https://github.com/yenchenlin/nerf-pytorch/blob/63a5a630c9abd62b0f21c08703d0ac2ea7d4b9dd/run_nerf_helpers.py#L48
+# copy from HyperDiffusion
+class Embedder:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.create_embedding_fn()
+
+    def create_embedding_fn(self):
+        embed_fns = []
+        d = self.kwargs["input_dims"]
+        out_dim = 0
+        if self.kwargs["include_input"]:
+            embed_fns.append(lambda x: x)
+            out_dim += d
+
+        max_freq = self.kwargs["max_freq_log2"]
+        N_freqs = self.kwargs["num_freqs"]
+
+        if self.kwargs["log_sampling"]:
+            freq_bands = 2.0 ** torch.linspace(0.0, max_freq, steps=N_freqs)
+        else:
+            freq_bands = torch.linspace(2.0**0.0, 2.0**max_freq, steps=N_freqs)
+        # 1 0 yap
+        for freq in freq_bands:
+            for p_fn in self.kwargs["periodic_fns"]:
+                embed_fns.append(lambda x, p_fn=p_fn, freq=freq: p_fn(x * freq))
+                out_dim += d
+
+        self.embed_fns = embed_fns
+        self.out_dim = out_dim
+
+    def embed(self, inputs):
+        return torch.cat([fn(inputs) for fn in self.embed_fns], -1)
+
+
+class HyperDiffusionMLP(nn.Module):
+    def __init__(
+        self,
+        out_size,
+        hidden_neurons,
+        use_leaky_relu=False,
+        use_bias=True,
+        multires=10,
+        output_type=None,
+        move=False,
+        **kwargs,
+    ):
+        super().__init__()
+        self.embedder = Embedder(
+            include_input=True,
+            input_dims=3 if not move else 4,
+            max_freq_log2=multires - 1,
+            num_freqs=multires,
+            log_sampling=True,
+            periodic_fns=[torch.sin, torch.cos],
+        )
+        self.layers = nn.ModuleList([])
+        self.output_type = output_type
+        self.use_leaky_relu = use_leaky_relu
+        in_size = self.embedder.out_dim
+        self.layers.append(nn.Linear(in_size, hidden_neurons[0], bias=use_bias))
+        for i, _ in enumerate(hidden_neurons[:-1]):
+            self.layers.append(
+                nn.Linear(hidden_neurons[i], hidden_neurons[i + 1], bias=use_bias)
+            )
+        self.layers.append(nn.Linear(hidden_neurons[-1], out_size, bias=use_bias))
+
+    def forward(self, model_input):
+        # NOTE: I don't need to keep input coords
+        # coords_org = model_input["coords"].clone().detach().requires_grad_(True)
+        # x = coords_org
+        x = model_input
+        x = self.embedder.embed(x)
+        for i, layer in enumerate(self.layers[:-1]):
+            x = layer(x)
+            x = F.leaky_relu(x) if self.use_leaky_relu else F.relu(x)
+        x = self.layers[-1](x)
+
+        # if self.output_type == "occ":
+        #     # x = torch.sigmoid(x)
+        #     pass
+        # elif self.output_type == "sdf":
+        #     x = torch.tanh(x)
+        # elif self.output_type == "logits":
+        #     x = x
+        # else:
+        #     raise f"This self.output_type ({self.output_type}) not implemented"
+        # x = dist.Bernoulli(logits=x).logits
+
+        # NOTE: I don't need to return original coords
+        # return {"model_in": coords_org, "model_out": x}
+        return x
