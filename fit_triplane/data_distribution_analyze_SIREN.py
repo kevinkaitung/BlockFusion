@@ -9,6 +9,7 @@ import json
 import matplotlib.pyplot as plt
 from pysampler import create_sampler, decode_shadow
 from fit_shadow_subset_training_SIREN import NeurCompNet
+from pathlib import Path
 
 # Add parent directory to sys.path
 # TODO: make it more flexible to call timevarying_data_helper anywhere
@@ -74,7 +75,8 @@ def inference(n_instances, data_res, chunk_size, value_range, nets, light_dirs, 
             for coord_chunk in generate_coords_chunks(data_res, chunk_size):
                 # preds.append(net(triplane[batch_idx](coord_chunk, 0)).cpu())
                 # need to clamp the value range in case extreme outliers would make the rest of most values gather in one bin
-                preds.append(nets[batch_idx](coord_chunk).clamp(-1.0, 2.0).cpu())
+                # preds.append(nets[batch_idx](coord_chunk).clamp(-1.0, 2.0).cpu())
+                preds.append(nets[batch_idx](coord_chunk).cpu())
                 # used when transforming the input values with inverse sigmoid
                 # preds.append(torch.sigmoid(net(triplane[batch_idx](coord_chunk, 0))).cpu())
             # outputs = net(triplane[batch_idx](coords, 0))
@@ -196,4 +198,13 @@ if __name__ == "__main__":
         plt.ylabel("Frequency")
         plt.grid(True, linestyle='--', alpha=0.5)
         plt.legend()
-        plt.savefig(f"value_dist_pred_at_ins_{idx}.png")
+        
+        # save to the first SIREN set's directory
+        # HACK: I know this script can support plotting histogram from multiple SIREN sets,
+        # but currently I mainly use for only 1 set to evaluate their histogram
+        path = Path(SIREN_file_paths[0])
+        dir_path = path.parent
+        filename_without_extension = path.stem
+        plt.savefig(os.path.join(dir_path, f"{filename_without_extension}_hist_ins_{idx}.png"))
+        
+        # plt.savefig(f"value_dist_pred_at_ins_{idx}.png")
