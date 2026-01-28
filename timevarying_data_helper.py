@@ -393,7 +393,7 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
 
         self.if_gradient = if_gradient
         if if_gradient:
-            self.selected_coord_groups = self.calculate_gradient(resolution)
+            self.selected_coord_groups, self.selected_value_groups = self.calculate_gradient(resolution)
         
         # for debug:
         # print("original spherical coords in radiance:", self.light_dir_spherical[:50])
@@ -441,6 +441,7 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
     
         # grad_norms = []
         selected_coord_groups = []
+        selected_value_groups = []
         # need to decode the volume first
         for idx in range(self.n_instances):
             targets = []
@@ -451,17 +452,30 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
             targets = torch.cat(targets, dim=0)
             targets = targets.reshape([resolution[2], resolution[1], resolution[0]])
             
+            ### section to generate coords based on grad norm
             # currently only use grad norm
-            _, grad_norm = calculate_gradient(targets)
-            # grad_norms.append(grad_norm)
-            grad_norm_thres = 0.5
-            selected_coords = torch.nonzero(grad_norm > grad_norm_thres)
-            print(f"instance {idx}: {selected_coords.shape[0]} points passing the gradient norm threshold")
-            # swap the 1st and 3rd col ((z, y, x) -> (x, y, z))
-            selected_coords[:, [0, 2]] = selected_coords[:, [2, 0]]
-            selected_coord_groups.append(selected_coords)
+            # _, grad_norm = calculate_gradient(targets)
+            # # grad_norms.append(grad_norm)
+            # grad_norm_thres = 0.5
+            # selected_coords = torch.nonzero(grad_norm > grad_norm_thres)
+            # print(f"instance {idx}: {selected_coords.shape[0]} points passing the gradient norm threshold")
+            # # swap the 1st and 3rd col ((z, y, x) -> (x, y, z))
+            # selected_coords[:, [0, 2]] = selected_coords[:, [2, 0]]
+            # selected_value_groups.append(targets[selected_coords[:, 2].int(), selected_coords[:, 1].int(), selected_coords[:, 0].int()])
+            # # NOTE: should normalize selected coords back to 0 to 1!!!
+            # selected_coords = selected_coords / torch.tensor([resolution[0] - 1, resolution[1] - 1, resolution[2] - 1], dtype=torch.float32)
+            # selected_coord_groups.append(selected_coords)
+            ### section end
             
-        return selected_coord_groups
+            ### section to uniformly generate coords
+            selected_coords = torch.rand([500000, 3], dtype=torch.float32) * torch.tensor([resolution[0] - 1, resolution[1] - 1, resolution[2] - 1], dtype=torch.float32)
+            selected_value_groups.append(targets[selected_coords[:, 2].int(), selected_coords[:, 1].int(), selected_coords[:, 0].int()])
+            # NOTE: should normalize selected coords back to 0 to 1!!!
+            selected_coords = selected_coords / torch.tensor([resolution[0] - 1, resolution[1] - 1, resolution[2] - 1], dtype=torch.float32)
+            selected_coord_groups.append(selected_coords)
+            ### section end
+            
+        return selected_coord_groups, selected_value_groups
         
 
 class EncodingWeightDataset(torch.utils.data.Dataset):
