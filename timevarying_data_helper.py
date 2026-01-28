@@ -370,7 +370,7 @@ def fibonacci_sphere(samples=1000, randomize=True):
 class RandomlyGenerateLightDir(torch.utils.data.Dataset):
     def __init__(
         self, sampler, n_instances, tfn, sample_batch_size=2**10, light_dir_spherical=None, light_dir_cartesian=None,
-        resolution=[None, None, None], if_gradient=False
+        resolution=[None, None, None], if_gradient=False, if_view_transform=False
     ):
         self.sampler = sampler
         self.n_instances = n_instances
@@ -391,10 +391,20 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
         # convert spherical coords from radiance unit to normalized value (0~1) for using in shadow sampler
         self.light_dir_spherical_normalized = spherical_coords_radiance_to_normalized(self.light_dir_spherical)
 
+        self.resolution = resolution
+        
+        if if_gradient == True and if_view_transform == True:
+            raise ValueError("Cannot set both if_gradient and if_view_transform to True")
+        
         self.if_gradient = if_gradient
         if if_gradient:
             self.selected_coord_groups, self.selected_value_groups = self.calculate_gradient(resolution)
         
+        self.if_view_transform = if_view_transform
+        if if_view_transform:
+            self.projection_space_resolution = [512, 512, 512]
+            self.view_trans_matrices, self.inv_view_trans_matrices, self.proj_trans_matrices, self.inv_proj_trans_matrices, self.translate_world_space = self.calculate_view_transform_and_projection_matrices()
+
         # for debug:
         # print("original spherical coords in radiance:", self.light_dir_spherical[:50])
         # print("transformed spherical coords in normalized value:", self.light_dir_spherical_normalized[:50])
@@ -413,14 +423,39 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
             # uniformly sample over the whole volume domain
             sample_coords = torch.rand([1024, 3], dtype=torch.float32, device="cuda")
             sample_coords = torch.cat([sample_coords, selected_coords], dim=0)
-            
             targets = torch.empty((sample_coords.shape[0], 1), dtype=torch.float32, device="cuda")
+            
+            decode_shadow(self.sampler, sample_coords, targets, self.light_dir_spherical_normalized[index], self.tfn)
+        elif self.if_view_transform:
+            sample_coords = torch.rand([self.sample_batch_size, 3], dtype=torch.float32, device="cuda")
+            targets = torch.full([self.sample_batch_size, 1], 0.0, dtype=torch.float32, device="cuda")
+            # NOTE: transform sample_coords from 0~1 to projection space (proj_space_x, proj_space_y, proj_space_z) which centers at the origin
+            # first step: shift 0~1 to -0.5~0.5
+            sample_coords = sample_coords - 0.5
+            # second step: scale to projection space resolution (-proj_space_x / 2, -proj_space_y / 2, -proj_space_z / 2) ~ (proj_space_x / 2, proj_space_y / 2, proj_space_z / 2)
+            sample_coords = sample_coords * torch.tensor([self.projection_space_resolution[0] - 1, self.projection_space_resolution[1] - 1, self.projection_space_resolution[2] - 1], dtype=torch.float32, device=sample_coords.device)
+            # third step: transform projection space coords back to world space
+            sample_coords = sample_coords @ self.inv_proj_trans_matrices[index] @ self.inv_view_trans_matrices[index] + self.translate_world_space
+            # fourth step: map world space coord back to 0~1 scale
+            sample_coords = sample_coords / torch.tensor([self.resolution[0] - 1, self.resolution[1] - 1, self.resolution[2] - 1], dtype=torch.float32, device=sample_coords.device)
+            # validity mask: all coordinates must be in [0, 1]
+            valid_mask = ((sample_coords >= 0.0) & (sample_coords <= 1.0)).all(dim=1)
+            
+            if valid_mask.any():
+                tmp_targets = torch.empty(
+                    (valid_mask.sum(), 1),
+                    device=targets.device,
+                    dtype=targets.dtype
+                )
+                decode_shadow(self.sampler, sample_coords[valid_mask], tmp_targets, self.light_dir_spherical_normalized[index], self.tfn)
+                targets[valid_mask] = tmp_targets
         else:
             # uniformly sample over the whole volume domain
             sample_coords = torch.rand([self.sample_batch_size, 3], dtype=torch.float32, device="cuda")
             targets = torch.empty((self.sample_batch_size, 1), dtype=torch.float32, device="cuda")
+            
+            decode_shadow(self.sampler, sample_coords, targets, self.light_dir_spherical_normalized[index], self.tfn)
         
-        decode_shadow(self.sampler, sample_coords, targets, self.light_dir_spherical_normalized[index], self.tfn)
         return index, sample_coords, targets
 
     def __len__(self):
@@ -476,6 +511,93 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
             ### section end
             
         return selected_coord_groups, selected_value_groups
+    
+    def calculate_view_transform_and_projection_matrices(self):
+        
+        view_transform_matrices = []
+        inverse_view_transform_matrices = []
+        projection_transform_matrices = []
+        inverse_projection_transform_matrices = []
+        
+        resolution = self.resolution
+        projection_space_resolution = self.projection_space_resolution
+        
+        # define the volume corners in world space (same for all light directions)
+        volume_corners_world = torch.tensor([
+            [0.0, 0.0, 0.0],
+            [resolution[0] - 1.0, 0.0, 0.0],
+            [0.0, resolution[1] - 1.0, 0.0],
+            [0.0, 0.0, resolution[2] - 1.0],
+            [resolution[0] - 1.0, resolution[1] - 1.0, 0.0],
+            [resolution[0] - 1.0, 0.0, resolution[2] - 1.0],
+            [0.0, resolution[1] - 1.0, resolution[2] - 1.0],
+            [resolution[0] - 1.0, resolution[1] - 1.0, resolution[2] - 1.0]
+        ], dtype=torch.float32)
+        translation_world = torch.tensor([(resolution[0] - 1.0) / 2.0, (resolution[1] - 1.0) / 2.0, (resolution[2] - 1.0) / 2.0], dtype=torch.float32)
+
+        # calculate all matrices for all light directions one by one
+        for light_direction in self.light_dir_cartesian:
+            
+            light_direction = torch.tensor(light_direction, dtype=torch.float32)
+            assert light_direction.shape == (3,)
+            
+            # NOTE: calculate view transform matrix
+            # calculate w axes
+            w = -light_direction
+            w = w / torch.norm(w)
+
+            # define view-up vector
+            world_up = torch.tensor([0.0, 1.0, 0.0], dtype=torch.float32)
+
+            # check to avoid the directions of w and up_vec are too close
+            if torch.abs(torch.dot(w, world_up)) > 0.99:
+                world_up = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float32)
+
+            right_vec = torch.cross(world_up, w)
+            right_vec = right_vec / torch.norm(right_vec)
+
+            up_vec = torch.cross(w, right_vec)
+            up_vec = up_vec/ torch.norm(up_vec)
+
+            view_transform_matrix = torch.stack([right_vec, up_vec, w], dim=0)
+            inverse_view_transform_matrix = torch.inverse(view_transform_matrix)
+            # sample coords will be generated on cuda, so directly offload transform matrices to cuda
+            view_transform_matrices.append(view_transform_matrix.to("cuda"))
+            inverse_view_transform_matrices.append(inverse_view_transform_matrix.to("cuda"))
+            
+            # NOTE: prepare volume corners in view space
+            volume_corners_view = (volume_corners_world - translation_world) @ view_transform_matrix
+            x_min_view = volume_corners_view[:,0].min()
+            x_max_view = volume_corners_view[:,0].max()
+            y_min_view = volume_corners_view[:,1].min()
+            y_max_view = volume_corners_view[:,1].max()
+            z_min_view = volume_corners_view[:,2].min()
+            z_max_view = volume_corners_view[:,2].max()
+            new_bounding_box_view_space = torch.tensor([
+                [x_min_view, y_min_view, z_min_view],
+                [x_max_view, y_min_view, z_min_view],
+                [x_min_view, y_max_view, z_min_view],
+                [x_min_view, y_min_view, z_max_view],
+                [x_max_view, y_max_view, z_min_view],
+                [x_max_view, y_min_view, z_max_view],
+                [x_min_view, y_max_view, z_max_view],
+                [x_max_view, y_max_view, z_max_view]
+            ])
+            # scale bounding box to anysize I want
+            new_bounding_box_view_space *= 1.0
+            # NOTE: calculate projection transform matrix
+            projection_transform_matrix = torch.tensor([
+                [projection_space_resolution[0] / (new_bounding_box_view_space[:,0].max() - new_bounding_box_view_space[:,0].min()), 0.0, 0.0],
+                [0.0, projection_space_resolution[1] / (new_bounding_box_view_space[:,1].max() - new_bounding_box_view_space[:,1].min()), 0.0],
+                [0.0, 0.0, projection_space_resolution[2] / (new_bounding_box_view_space[:,2].max() - new_bounding_box_view_space[:,2].min())]
+            ])
+            inverse_projection_transform_matrix = torch.inverse(projection_transform_matrix)
+            projection_transform_matrices.append(projection_transform_matrix.to("cuda"))
+            inverse_projection_transform_matrices.append(inverse_projection_transform_matrix.to("cuda"))
+        
+        translation_world = translation_world.to("cuda")
+        return view_transform_matrices, inverse_view_transform_matrices, projection_transform_matrices, inverse_projection_transform_matrices, translation_world
+        
         
 
 class EncodingWeightDataset(torch.utils.data.Dataset):
