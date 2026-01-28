@@ -19,7 +19,8 @@ args = parser.parse_args()
 #  1558, 1582, 1588, 1590, 1640, 1676, 1677, 1724, 1732, 1735, 1752, 1763, 1767,
 #  1769, 1800, 1805, 1816, 1826, 1841, 1853, 1879, 1909, 1935, 1961, 2000, 2008,
 #  2068, 2071, 2091]
-indices=[59]
+indices=[idx for idx in range(256)]
+print(indices)
 
 old_model = torch.load(os.path.join(args.model_dir, args.filename))
 new_model = dict()
