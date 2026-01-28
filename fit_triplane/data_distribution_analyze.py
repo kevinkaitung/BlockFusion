@@ -76,7 +76,8 @@ def inference(n_instances, data_res, chunk_size, value_range, triplane, net, lig
             for coord_chunk in generate_coords_chunks(data_res, chunk_size):
                 # preds.append(net(triplane[batch_idx](coord_chunk, 0)).cpu())
                 # need to clamp the value range in case extreme outliers would make the rest of most values gather in one bin
-                preds.append(net(triplane[batch_idx](coord_chunk, 0)).clamp(-1.0, 2.0).cpu())
+                # preds.append(net(triplane[batch_idx](coord_chunk, 0)).clamp(-1.0, 2.0).cpu())
+                preds.append(net(triplane[batch_idx](coord_chunk, 0)).cpu())
                 # used when transforming the input values with inverse sigmoid
                 # preds.append(torch.sigmoid(net(triplane[batch_idx](coord_chunk, 0))).cpu())
             # outputs = net(triplane[batch_idx](coords, 0))
