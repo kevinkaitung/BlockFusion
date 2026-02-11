@@ -605,7 +605,7 @@ from pathlib import Path
 class TimevaryingDataset_with_Sampler(torch.utils.data.Dataset):
     def __init__(
         self, raw_data_dir, raw_data_filename_without_timestep, file_ext, res, data_type, n_instances, n_channels,
-        timesteps, sample_batch_size=2**10
+        timesteps, sample_batch_size=2**10, if_get_presampled_points=False
     ):
         self.n_instances = n_instances
         self.n_channels = n_channels
@@ -621,6 +621,38 @@ class TimevaryingDataset_with_Sampler(torch.utils.data.Dataset):
         self.data_min = 0.0
         self.data_max = 1.0
         self.value_range = self.data_max - self.data_min
+
+        if if_get_presampled_points:
+            self.selected_coord_groups, self.selected_value_groups = self.get_presampled_points()
+
+    def get_presampled_points(self):
+        
+        from fit_triplane.data_distribution_analyze import generate_coords_chunks
+        
+        chunk_size = 65536*8192
+    
+        selected_coord_groups = []
+        selected_value_groups = []
+        # need to decode the volume first
+        for idx in range(self.n_instances):
+            targets = []
+            for coord_chunk in generate_coords_chunks(self.res, chunk_size):
+                target = torch.empty([coord_chunk.shape[0], 1]).float().cuda()
+                decode(self.all_samplers[idx], coord_chunk, target)
+                targets.append(target.cpu())
+            targets = torch.cat(targets, dim=0)
+            targets = targets.reshape([self.res[2], self.res[1], self.res[0]])
+            
+            ### section to uniformly generate coords
+            selected_coords = torch.rand([500000, 3], dtype=torch.float32) * torch.tensor([self.res[0] - 1, self.res[1] - 1, self.res[2] - 1], dtype=torch.float32)
+            selected_value_groups.append(targets[selected_coords[:, 2].int(), selected_coords[:, 1].int(), selected_coords[:, 0].int()])
+            # NOTE: should normalize selected coords back to 0 to 1!!!
+            selected_coords = selected_coords / torch.tensor([self.res[0] - 1, self.res[1] - 1, self.res[2] - 1], dtype=torch.float32)
+            selected_coord_groups.append(selected_coords)
+            print(f"instance {idx}: {selected_coords.shape[0]} points passing the gradient norm threshold")
+            ### section end
+            
+        return selected_coord_groups, selected_value_groups
 
     def __getitem__(self, index):
         # generate random coordinates
