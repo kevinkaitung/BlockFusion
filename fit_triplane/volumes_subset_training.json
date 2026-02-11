@@ -1,0 +1,17 @@
+{
+    "max_iters": 6000,
+    "lr_net": 1e-3,
+    "lr_tri": 1e-3,
+    "batch_size": 200,
+    "subset_reload_iters": 6000,
+
+    "n_layers": 4,
+    "n_hid": 32,
+    "channel": 32,
+    "resolution": 128,
+    "c2f_scale": [100,1000,2000,3000,4500],
+
+    "sample_batch_size": 16384,
+
+    "n_labels": 1
+}
