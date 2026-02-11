@@ -30,7 +30,7 @@ if current_dir not in sys.path:
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 from visualize_triplane import plot_single_channel
-from timevarying_data_helper import SampleShadowVolumesDataset, RandomlyGenerateLightDir, fibonacci_sphere, cartesian_to_spherical_coords
+from timevarying_data_helper import TimevaryingDataset_with_Sampler, fibonacci_sphere, cartesian_to_spherical_coords
 
 check_plane_idx = 40
 vis_triplane_freq = 2000
@@ -70,10 +70,9 @@ if __name__ == "__main__":
     
     parser.add_argument('--dims', type=int, nargs=3, default=[256, 256, 256])
     parser.add_argument('--dtype', type=str, default='float32')
-    parser.add_argument('--raw_data_file_path', type=str, default="/media/data/qadwu/volume/vortices/vorts1.data")
-    parser.add_argument('--tfn_file_path', type=str, default="/home/kctung/Projects/instant-vnr-pytorch/bindings/ovr/data/configs/vorts_shadow.json")
+    # HACK: currently assume all volumes would be placed in one directory
+    parser.add_argument('--raw_data_dir', type=str, default="/media/data/qadwu/volume/vortices/vorts1.data")
     parser.add_argument('--n_instances', type=int, default=150, help="Number of shadow volumes to generate")
-    parser.add_argument('--selected_light_dirs_file_path', type=str)
     parser.add_argument('--output_activation', type=str, default="None")
     args = parser.parse_args()
 
@@ -107,38 +106,19 @@ if __name__ == "__main__":
     # console_logger.debug("Only finetune mlp: " + str(args.only_finetune_mlp))
     console_logger.debug("Optimizer Type: " + args.optimizer_type)
     console_logger.debug("Use Native MLP: " + str(args.use_native_mlp))
-    console_logger.debug("Path to Raw Data File: " + args.raw_data_file_path)
-    console_logger.debug("Path to TFN Data File: " + args.tfn_file_path)
+    console_logger.debug("Path to Raw Data Directory: " + args.raw_data_dir)
     console_logger.debug("Number of Instances Generated: " + str(args.n_instances))
-    if args.selected_light_dirs_file_path:
-        console_logger.debug("Selected Light Directions File Path: " + args.selected_light_dirs_file_path)
     console_logger.debug("MLP Output Activation: " + args.output_activation)
     
     with open(args.config, 'r') as f:
         config = json.load(f)
     config = edict(config)
 
-    sampler = create_sampler("structuredRegular", "cuda", dims=args.dims, dtype=args.dtype, n_channels=1, filename=args.raw_data_file_path)
-    
-    # if selected_light_dirs_file_path is defined, use the light dirs from the file
-    if args.selected_light_dirs_file_path:
-        with open(args.selected_light_dirs_file_path, 'r') as f:
-            selected_light_dirs = json.load(f)
-        # only get n_instances light dirs
-        all_lighting_dirs_cartesian = np.array(selected_light_dirs["light_dir_cartesian"][:args.n_instances])
-        print(f"Check the shape of loaded lighting directions: {all_lighting_dirs_cartesian.shape}")
-    # otherwise, generated n_instances points on Fibonacci Sphere
-    else:
-        # return as np array
-        all_lighting_dirs_cartesian = fibonacci_sphere(args.n_instances, False)
-    all_lighting_dirs_spherical = cartesian_to_spherical_coords(all_lighting_dirs_cartesian)
+    # instead of using light directions as label for each volume, create timesteps
+    all_timesteps = [i for i in range(args.n_instances)]
     
     # generate permuted indices
-    permuted_indices = np.random.permutation(len(all_lighting_dirs_cartesian))
-    
-    all_lighting_dirs_cartesian = all_lighting_dirs_cartesian[permuted_indices].tolist()
-    all_lighting_dirs_spherical = all_lighting_dirs_spherical[permuted_indices].tolist()
-    
+    permuted_indices = np.random.permutation(len(all_timesteps))
     
     if args.use_native_mlp:
         net = Network(
@@ -180,8 +160,7 @@ if __name__ == "__main__":
         torch.save({
             'triplane_state_dict': triplane.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
-            'light_dir_spherical': all_lighting_dirs_spherical[start_idx:end_idx],
-            'light_dir_cartesian': all_lighting_dirs_cartesian[start_idx:end_idx],
+            'timesteps': all_timesteps[start_idx:end_idx],
             'offset': start_idx,
             'end_idx': end_idx,
             # 'lr_net': final_lr_net,
@@ -280,14 +259,17 @@ if __name__ == "__main__":
             
             # create DataLoader for this subset
             train_dataloader = torch.utils.data.DataLoader(
-            RandomlyGenerateLightDir(
-                sampler=sampler,
+            TimevaryingDataset_with_Sampler(
+                raw_data_dir=args.raw_data_dir,
+                # HACK: just assume volume names start with "timestep_"
+                raw_data_filename_without_timestep="timestep_",
+                file_ext="bin",
+                res=args.dims,
+                data_type=args.dtype,
                 n_instances=config.batch_size,
-                tfn=args.tfn_file_path,
-                sample_batch_size=config.sample_batch_size,
-                light_dir_cartesian=subset_model['light_dir_cartesian'],
-                resolution=args.dims,
-                if_view_transform=True
+                n_channels=1,
+                timesteps=subset_model["timesteps"],
+                sample_batch_size=config.sample_batch_size
             ),
             batch_size=config.batch_size,
             shuffle=True)
@@ -373,6 +355,13 @@ if __name__ == "__main__":
                 update_lr(optimizer, epoch, config)
                 print(f"Mem Alloc: {torch.cuda.memory_allocated() / 1024**3:.2f} GB / Reserved: {torch.cuda.memory_reserved() / 1024**3:.2f} GB / Max Alloc: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB / Max Reserved: {torch.cuda.max_memory_reserved() / 1024**3:.2f} GB")
 
+            import gc
+            # free train dataloader
+            train_dataloader.dataset.all_samplers.clear()
+            del train_dataloader
+            gc.collect()
+            torch.cuda.empty_cache()
+
             # get the final learning rates of triplane and MLP
             for param_group in optimizer.param_groups:
                 if "tri" in param_group['name']:
@@ -385,8 +374,7 @@ if __name__ == "__main__":
                 'net_state_dict': net.state_dict(),
                 'triplane_state_dict': triplane.state_dict(),
                 # 'optimizer_state_dict': optimizer.state_dict(),
-                'light_dir_spherical': subset_model['light_dir_spherical'],
-                'light_dir_cartesian': subset_model['light_dir_cartesian'],
+                'timesteps': subset_model['timesteps'],
                 'offset': offset,
                 'end_idx': subset_model['end_idx'],
                 # 'lr_net': final_lr_net,
@@ -409,8 +397,8 @@ if __name__ == "__main__":
                                 # no longer keep net optimizer state after the final stage of triplane training
                                 # TODO: maybe can keep the last net optimizer state somewhere
                                 # 'optimizer_state_dict': optimizer.state_dict(),
-                                'light_dir_spherical': all_lighting_dirs_spherical,
-                                'light_dir_cartesian': all_lighting_dirs_cartesian,
+                                'timesteps': all_timesteps,
+                                # NOTE: we didn't permute the timesteps instances in this training 
                                 'permuted_indices': permuted_indices.tolist(),
                                 'lr_net': final_lr_net,
                                 'epoch': epoch,

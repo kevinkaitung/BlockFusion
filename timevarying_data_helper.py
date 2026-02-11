@@ -4,7 +4,7 @@ import torch
 import glob
 import json
 try:
-    from pysampler import decode_shadow
+    from pysampler import decode_shadow, decode, create_sampler
 except ImportError:
     pass
 
@@ -598,6 +598,40 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
         translation_world = translation_world.to("cuda")
         return view_transform_matrices, inverse_view_transform_matrices, projection_transform_matrices, inverse_projection_transform_matrices, translation_world
         
+        
+from pathlib import Path
+
+class TimevaryingDataset_with_Sampler(torch.utils.data.Dataset):
+    def __init__(
+        self, raw_data_dir, raw_data_filename_without_timestep, file_ext, res, data_type, n_instances, n_channels,
+        timesteps, sample_batch_size=2**10
+    ):
+        self.n_instances = n_instances
+        self.n_channels = n_channels
+        self.res = res
+        self.sample_batch_size = sample_batch_size
+        
+        self.all_samplers = []
+        # HACK: currently just use the order of the files in the directory as the time sequence
+        for timestep in timesteps:
+            file_path = os.path.join(raw_data_dir, f"{raw_data_filename_without_timestep}{timestep}.{file_ext}")
+            self.all_samplers.append(create_sampler("structuredRegular", "cuda", dims=res, dtype=data_type, n_channels=1, filename=file_path))
+
+        self.data_min = 0.0
+        self.data_max = 1.0
+        self.value_range = self.data_max - self.data_min
+
+    def __getitem__(self, index):
+        # generate random coordinates
+        sample_coords = torch.rand([self.sample_batch_size, 3], dtype=torch.float32, device="cuda")
+        targets = torch.empty((self.sample_batch_size, 1), dtype=torch.float32, device="cuda")
+        
+        decode(self.all_samplers[index], sample_coords, targets)
+        
+        return index, sample_coords, targets
+
+    def __len__(self):
+        return self.n_instances
         
 
 class EncodingWeightDataset(torch.utils.data.Dataset):
