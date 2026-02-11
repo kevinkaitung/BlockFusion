@@ -472,7 +472,7 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
         from fit_triplane.data_distribution_analyze import generate_coords_chunks
         from fit_triplane.calculate_gradient import calculate_gradient
         
-        chunk_size = 65536*192
+        chunk_size = 65536*8192
     
         # grad_norms = []
         selected_coord_groups = []
@@ -508,6 +508,7 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
             # NOTE: should normalize selected coords back to 0 to 1!!!
             selected_coords = selected_coords / torch.tensor([resolution[0] - 1, resolution[1] - 1, resolution[2] - 1], dtype=torch.float32)
             selected_coord_groups.append(selected_coords)
+            print(f"instance {idx}: {selected_coords.shape[0]} points passing the gradient norm threshold")
             ### section end
             
         return selected_coord_groups, selected_value_groups
