@@ -611,12 +611,16 @@ class TimevaryingDataset_with_Sampler(torch.utils.data.Dataset):
         self.n_channels = n_channels
         self.res = res
         self.sample_batch_size = sample_batch_size
+        self.data_type = data_type
         
-        self.all_samplers = []
+        self.all_samplers = [None] * len(timesteps)
+        self.all_file_paths = []
         # HACK: currently just use the order of the files in the directory as the time sequence
         for timestep in timesteps:
             file_path = os.path.join(raw_data_dir, f"{raw_data_filename_without_timestep}{timestep}.{file_ext}")
-            self.all_samplers.append(create_sampler("structuredRegular", "cuda", dims=res, dtype=data_type, n_channels=1, filename=file_path))
+            # self.all_samplers.append(create_sampler("structuredRegular", "cuda", dims=res, dtype=data_type, n_channels=1, filename=file_path))
+            # Instead, do lazy initialization
+            self.all_file_paths.append(file_path)
 
         self.data_min = 0.0
         self.data_max = 1.0
@@ -625,11 +629,23 @@ class TimevaryingDataset_with_Sampler(torch.utils.data.Dataset):
         if if_get_presampled_points:
             self.selected_coord_groups, self.selected_value_groups = self.get_presampled_points()
 
+    def get_sampler(self, idx):
+        if self.all_samplers[idx] is None:
+            self.all_samplers[idx] = create_sampler(
+                "structuredRegular",
+                "cuda",
+                dims=self.res,
+                dtype=self.data_type,
+                n_channels=1,
+                filename=self.all_file_paths[idx]
+            )
+        return self.all_samplers[idx]
+
     def get_presampled_points(self):
         
         from fit_triplane.data_distribution_analyze import generate_coords_chunks
         
-        chunk_size = 65536*8192
+        chunk_size = 65536*16384
     
         selected_coord_groups = []
         selected_value_groups = []
@@ -638,10 +654,16 @@ class TimevaryingDataset_with_Sampler(torch.utils.data.Dataset):
             targets = []
             for coord_chunk in generate_coords_chunks(self.res, chunk_size):
                 target = torch.empty([coord_chunk.shape[0], 1]).float().cuda()
-                decode(self.all_samplers[idx], coord_chunk, target)
+                decode(self.get_sampler(idx), coord_chunk, target)
                 targets.append(target.cpu())
             targets = torch.cat(targets, dim=0)
             targets = targets.reshape([self.res[2], self.res[1], self.res[0]])
+            
+            # HACK: delete sampler after use, otherwise, would encounter OOM error
+            self.all_samplers[idx] = None
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
             
             ### section to uniformly generate coords
             selected_coords = torch.rand([500000, 3], dtype=torch.float32) * torch.tensor([self.res[0] - 1, self.res[1] - 1, self.res[2] - 1], dtype=torch.float32)
@@ -659,7 +681,7 @@ class TimevaryingDataset_with_Sampler(torch.utils.data.Dataset):
         sample_coords = torch.rand([self.sample_batch_size, 3], dtype=torch.float32, device="cuda")
         targets = torch.empty((self.sample_batch_size, 1), dtype=torch.float32, device="cuda")
         
-        decode(self.all_samplers[index], sample_coords, targets)
+        decode(self.get_sampler(index), sample_coords, targets)
         
         return index, sample_coords, targets
 

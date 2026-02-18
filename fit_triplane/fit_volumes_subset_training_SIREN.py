@@ -28,7 +28,7 @@ if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
-from timevarying_data_helper import SampleShadowVolumesDataset, RandomlyGenerateLightDir, fibonacci_sphere, cartesian_to_spherical_coords
+from timevarying_data_helper import TimevaryingDataset_with_Sampler, fibonacci_sphere, cartesian_to_spherical_coords
 
 def create_optimizer(net, triplane, config, optimizer_type):
     params_to_train = []
@@ -102,10 +102,8 @@ if __name__ == "__main__":
     
     parser.add_argument('--dims', type=int, nargs=3, default=[256, 256, 256])
     parser.add_argument('--dtype', type=str, default='float32')
-    parser.add_argument('--raw_data_file_path', type=str, default="/media/data/qadwu/volume/vortices/vorts1.data")
-    parser.add_argument('--tfn_file_path', type=str, default="/home/kctung/Projects/instant-vnr-pytorch/bindings/ovr/data/configs/vorts_shadow.json")
+    parser.add_argument('--raw_data_dir', type=str, default="/media/data/qadwu/volume/vortices/vorts1.data")
     parser.add_argument('--n_instances', type=int, default=150, help="Number of shadow volumes to generate")
-    parser.add_argument('--selected_light_dirs_file_path', type=str)
     parser.add_argument('--output_activation', type=str, default="None")
     args = parser.parse_args()
 
@@ -137,37 +135,19 @@ if __name__ == "__main__":
     #     console_logger.debug("Resume Training Model Path: " + args.resume_training_model)
     console_logger.debug("Config File Name: " + args.config)
     console_logger.debug("Optimizer Type: " + args.optimizer_type)
-    console_logger.debug("Path to Raw Data File: " + args.raw_data_file_path)
-    console_logger.debug("Path to TFN Data File: " + args.tfn_file_path)
+    console_logger.debug("Path to Raw Data Directory: " + args.raw_data_dir)
     console_logger.debug("Number of Instances Generated: " + str(args.n_instances))
-    if args.selected_light_dirs_file_path:
-        console_logger.debug("Selected Light Directions File Path: " + args.selected_light_dirs_file_path)
     console_logger.debug("MLP Output Activation: " + args.output_activation)
     
     with open(args.config, 'r') as f:
         config = json.load(f)
     config = edict(config)
 
-    sampler = create_sampler("structuredRegular", "cuda", dims=args.dims, dtype=args.dtype, n_channels=1, filename=args.raw_data_file_path)
-    
-    # if selected_light_dirs_file_path is defined, use the light dirs from the file
-    if args.selected_light_dirs_file_path:
-        with open(args.selected_light_dirs_file_path, 'r') as f:
-            selected_light_dirs = json.load(f)
-        # only get n_instances light dirs
-        all_lighting_dirs_cartesian = np.array(selected_light_dirs["light_dir_cartesian"][:args.n_instances])
-        print(f"Check the shape of loaded lighting directions: {all_lighting_dirs_cartesian.shape}")
-    # otherwise, generated n_instances points on Fibonacci Sphere
-    else:
-        # return as np array
-        all_lighting_dirs_cartesian = fibonacci_sphere(args.n_instances, False)
-    all_lighting_dirs_spherical = cartesian_to_spherical_coords(all_lighting_dirs_cartesian)
+    # instead of using light directions as label for each volume, create timesteps
+    all_timesteps = [i for i in range(args.n_instances)]
     
     # generate permuted indices
-    permuted_indices = np.random.permutation(len(all_lighting_dirs_cartesian))
-    
-    all_lighting_dirs_cartesian = all_lighting_dirs_cartesian[permuted_indices].tolist()
-    all_lighting_dirs_spherical = all_lighting_dirs_spherical[permuted_indices].tolist()
+    permuted_indices = np.random.permutation(len(all_timesteps))
     
     epoch = 0
     # for grouping triplanes and their corresponding optimizers
@@ -183,15 +163,18 @@ if __name__ == "__main__":
     sample_net = nn.ModuleList([NeurCompNet(n_input_dims=3, n_output_dims=config.n_labels, bias=False, n_hidden_layers=config.n_layers, n_neurons=config.n_hid, is_residual=True).cuda()])
     sample_opt = create_optimizer(sample_net, None, sample_config, args.optimizer_type)
     sample_dataloader = torch.utils.data.DataLoader(
-        RandomlyGenerateLightDir(
-            sampler=sampler,
+        TimevaryingDataset_with_Sampler(
+            raw_data_dir=args.raw_data_dir,
+            # HACK: just assume volume names start with "timestep_"
+            raw_data_filename_without_timestep="timestep_",
+            file_ext="bin",
+            res=args.dims,
+            data_type=args.dtype,
             n_instances=1,
-            tfn=args.tfn_file_path,
+            n_channels=1,
+            # NOTE: use the first timestep to preoptimize SIREN
+            timesteps=all_timesteps[0:1],
             sample_batch_size=config.sample_batch_size,
-            light_dir_cartesian=all_lighting_dirs_cartesian[:1],
-            # only specify when you need importance sampling on larger gradient points
-            # resolution=args.dims,
-            # if_gradient=True
         ),
         batch_size=1,
         shuffle=True)
@@ -227,8 +210,7 @@ if __name__ == "__main__":
         torch.save({
             'net_state_dict': nets.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
-            'light_dir_spherical': all_lighting_dirs_spherical[start_idx:end_idx],
-            'light_dir_cartesian': all_lighting_dirs_cartesian[start_idx:end_idx],
+            'timesteps': all_timesteps[start_idx:end_idx],
             'offset': start_idx,
             'end_idx': end_idx,
             # 'lr_net': final_lr_net,
@@ -274,21 +256,30 @@ if __name__ == "__main__":
         
         # create DataLoader for this subset
         train_dataloader = torch.utils.data.DataLoader(
-        RandomlyGenerateLightDir(
-            sampler=sampler,
+        TimevaryingDataset_with_Sampler(
+            raw_data_dir=args.raw_data_dir,
+            # HACK: just assume volume names start with "timestep_"
+            raw_data_filename_without_timestep="timestep_",
+            file_ext="bin",
+            res=args.dims,
+            data_type=args.dtype,
             n_instances=config.batch_size,
-            tfn=args.tfn_file_path,
-            sample_batch_size=config.sample_batch_size,
-            light_dir_cartesian=subset_model['light_dir_cartesian'],
-            # only specify when you need importance sampling on larger gradient points
-            # resolution=args.dims,
-            # if_gradient=True
+            n_channels=1,
+            timesteps=subset_model["timesteps"],
+            sample_batch_size=config.sample_batch_size
         ),
         batch_size=config.batch_size,
         shuffle=True)
         value_range = train_dataloader.dataset.value_range
         
         nets, optimizer, epoch = training_loop(start_epoch, offset, train_dataloader, value_range, nets, optimizer, config, tensorboard_writer, console_logger)
+        
+        import gc
+        # free train dataloader
+        train_dataloader.dataset.all_samplers.clear()
+        del train_dataloader
+        gc.collect()
+        torch.cuda.empty_cache()
         
         # get the final learning rates of MLP
         for param_group in optimizer.param_groups:
@@ -301,8 +292,7 @@ if __name__ == "__main__":
         torch.save({
             'net_state_dict': nets.state_dict(),
             # 'optimizer_state_dict': optimizer.state_dict(),
-            'light_dir_spherical': subset_model['light_dir_spherical'],
-            'light_dir_cartesian': subset_model['light_dir_cartesian'],
+            'timesteps': subset_model['timesteps'],
             'offset': offset,
             'end_idx': subset_model['end_idx'],
             'lr_net': final_lr_net,
@@ -312,8 +302,8 @@ if __name__ == "__main__":
         # save all lighting dirs and permuted indices
         if offset_idx == 0:
             torch.save({
-                            'light_dir_spherical': all_lighting_dirs_spherical,
-                            'light_dir_cartesian': all_lighting_dirs_cartesian,
+                            'timesteps': all_timesteps,
+                            # NOTE: we didn't permute the timesteps instances in this training 
                             'permuted_indices': permuted_indices.tolist(),
-                        }, os.path.join(run_dir, f"all_lights_info.ckpt"))
+                        }, os.path.join(run_dir, f"all_timesteps_info.ckpt"))
     console_logger.debug(f"Peak memory usage: allocated: {torch.cuda.memory.max_memory_allocated() / 1024**3} reserved: {torch.cuda.memory.max_memory_reserved() / 1024**3}")
