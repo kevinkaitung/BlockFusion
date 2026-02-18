@@ -1,3 +1,4 @@
+from pysampler import create_sampler, decode_shadow, decode
 from easydict import EasyDict as edict
 import argparse
 from torch import nn
@@ -7,7 +8,6 @@ import numpy as np
 import os, sys
 import json
 import matplotlib.pyplot as plt
-from pysampler import create_sampler, decode_shadow
 from fit_shadow_subset_training_SIREN import NeurCompNet
 from pathlib import Path
 
@@ -16,7 +16,7 @@ from pathlib import Path
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
-from timevarying_data_helper import cartesian_to_spherical_coords
+from timevarying_data_helper import cartesian_to_spherical_coords, TimevaryingDataset_with_Sampler
 
 # for debug
 def only_decode_raw_shadow(sampler, data_res, chunk_size, tfn_file_path, angle=[0.5, 0.5]):
@@ -47,14 +47,14 @@ def generate_coords_chunks(data_res, chunk_size, device='cuda'):
         # allocate memory on CPU, only move to GPU when used for model inference
         yield coords[start:end].to(device)
 
-def cal_GT_hist(n_instances, data_res, chunk_size, light_dirs, tfn_file_path):
+def cal_GT_hist(n_instances, data_res, chunk_size, data_sampler):
     hist_cache = []
     with torch.no_grad():
         for batch_idx in range(n_instances):
             targets = []
             for coord_chunk in generate_coords_chunks(data_res, chunk_size):
                 target = torch.empty([coord_chunk.shape[0], 1]).float().cuda()
-                decode_shadow(sampler, coord_chunk, target, light_dirs[batch_idx], tfn_file_path)
+                decode(data_sampler.get_sampler(batch_idx), coord_chunk, target)
                 targets.append(target.cpu())
             targets = torch.cat(targets, dim=0)
             counts, bin_edges = np.histogram(targets.numpy(), bins=100)
@@ -63,9 +63,11 @@ def cal_GT_hist(n_instances, data_res, chunk_size, light_dirs, tfn_file_path):
             # save the GPU memory 
             del targets
             torch.cuda.empty_cache()
+            # HACK: delete sampler after use, otherwise, would encounter OOM error
+            data_sampler.delete_sampler(batch_idx)
     return hist_cache
 
-def inference(n_instances, data_res, chunk_size, value_range, nets, light_dirs, tfn_file_path, loaded_model, recon_type):
+def inference(n_instances, data_res, chunk_size, value_range, nets, data_sampler, loaded_model, recon_type):
     psnr_list = []
     hist_cache = []
     with torch.no_grad():
@@ -88,7 +90,7 @@ def inference(n_instances, data_res, chunk_size, value_range, nets, light_dirs, 
             targets = []
             for coord_chunk in generate_coords_chunks(data_res, chunk_size):
                 target = torch.empty([coord_chunk.shape[0], 1]).float().cuda()
-                decode_shadow(sampler, coord_chunk, target, light_dirs[batch_idx], tfn_file_path)
+                decode(data_sampler.get_sampler(batch_idx), coord_chunk, target)
                 targets.append(target.cpu())
             targets = torch.cat(targets, dim=0)
             targets = targets[indices_to_preserve]
@@ -107,6 +109,8 @@ def inference(n_instances, data_res, chunk_size, value_range, nets, light_dirs, 
             # save the GPU memory 
             del outputs, targets, loss
             torch.cuda.empty_cache()
+            # HACK: delete sampler after use, otherwise, would encounter OOM error
+            data_sampler.delete_sampler(batch_idx)
     return psnr_list, hist_cache
 
 if __name__ == "__main__":
@@ -117,8 +121,7 @@ if __name__ == "__main__":
     parser.add_argument('--SIREN_recon_types', type=str, nargs='+', default='vae_recon')
     parser.add_argument('--dims', type=int, nargs=3, default=[256, 256, 256])
     parser.add_argument('--dtype', type=str, default='float32')
-    parser.add_argument('--raw_data_file_path', type=str, default="/media/data/qadwu/volume/vortices/vorts1.data")
-    parser.add_argument('--tfn_file_path', type=str, default="/home/kctung/Projects/instant-vnr-pytorch/bindings/ovr/data/configs/vorts_shadow.json")
+    parser.add_argument('--raw_data_dir', type=str, default="/media/data/qadwu/volume/vortices/vorts1.data")
     parser.add_argument('--output_activations', type=str, nargs='+') # default: None
     
     args = parser.parse_args()
@@ -141,10 +144,6 @@ if __name__ == "__main__":
         last = output_activations[-1] if output_activations else None
         output_activations = output_activations + [last] * (len(SIREN_file_paths) - len(output_activations))    
     
-    # volume reconstructed by triplane should between 0~1
-    value_range = 1.0
-    sampler = create_sampler("structuredRegular", "cuda", dims=args.dims, dtype=args.dtype, n_channels=1, filename=args.raw_data_file_path)
-    
     psnr_lists = []
     hist_caches = []
     
@@ -156,7 +155,8 @@ if __name__ == "__main__":
         
         loaded_model = torch.load(SIREN_file_path, map_location="cpu")
         
-        n_instances = len(loaded_model['light_dir_cartesian'])
+        all_timesteps = loaded_model['timesteps']
+        n_instances = len(all_timesteps)
         
         # instantiate multiple SIRENs (each instance has its own triplane)
         nets = [NeurCompNet(n_input_dims=3, 
@@ -165,20 +165,30 @@ if __name__ == "__main__":
                     n_neurons=config.n_hid, is_residual=True).cuda() for _ in range(n_instances)]
         nets = nn.ModuleList(nets)
     
-        light_dirs = cartesian_to_spherical_coords(np.array(loaded_model['light_dir_cartesian']))
-        print(f"light dirs 1: {light_dirs}")
-    
-        # normalize the spherical coordinates to 0~1 (to comply with shadow sampler)
-        light_dirs[:,0] = (light_dirs[:,0] % (2*np.pi)) / (2*np.pi)
-        light_dirs[:,1] = light_dirs[:,1] / np.pi
+        data_sampler = TimevaryingDataset_with_Sampler(
+                raw_data_dir=args.raw_data_dir,
+                # HACK: just assume volume names start with "timestep_"
+                raw_data_filename_without_timestep="timestep_",
+                file_ext="bin",
+                res=args.dims,
+                data_type=args.dtype,
+                n_instances=n_instances,
+                n_channels=1,
+                # NOTE: use the first timestep to preoptimize SIREN
+                timesteps=all_timesteps,
+                sample_batch_size=config.sample_batch_size,
+            )
+        value_range = data_sampler.value_range
 
-        psnr_list, hist_cache = inference(n_instances, data_res, chunk_size, value_range, nets, light_dirs, args.tfn_file_path, loaded_model, recon_type)
+        print(f"all timesteps: {all_timesteps}")
+
+        psnr_list, hist_cache = inference(n_instances, data_res, chunk_size, value_range, nets, data_sampler, loaded_model, recon_type)
         psnr_lists.append(psnr_list)
         hist_caches.append(hist_cache)
     
     # use the light directions from the last loaded model
     # TODO: might need to find more reasonable impl. or just don't support varying length array
-    GT_hist_cache = cal_GT_hist(n_instances, data_res, chunk_size, light_dirs, args.tfn_file_path)
+    GT_hist_cache = cal_GT_hist(n_instances, data_res, chunk_size, data_sampler)
     
     max_instances = max(len(lst) for lst in psnr_lists)
     for idx in range(max_instances):
@@ -192,7 +202,7 @@ if __name__ == "__main__":
                 print(f"{args.SIREN_recon_types[j]} PSNR: N / A, ", end="")
         print("")
         plt.hist(GT_hist_cache[idx][1][:-1], GT_hist_cache[idx][1], weights=GT_hist_cache[idx][0], alpha=0.8, label="Ground Truth", log=True)
-        plt.title(f"Value Dist of Reconstructed Shadow Coefficient Volume")
+        plt.title(f"Value Dist of Reconstructed Timevarying Volume")
         # plt.title(f"Value Distribution of Reconstructed Shadow Coefficient Volume at instance {idx}")
         plt.xlabel("Value")
         plt.ylabel("Frequency")

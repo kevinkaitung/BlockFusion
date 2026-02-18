@@ -601,6 +601,7 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
         
         
 from pathlib import Path
+import gc
 
 class TimevaryingDataset_with_Sampler(torch.utils.data.Dataset):
     def __init__(
@@ -640,6 +641,12 @@ class TimevaryingDataset_with_Sampler(torch.utils.data.Dataset):
                 filename=self.all_file_paths[idx]
             )
         return self.all_samplers[idx]
+
+    def delete_sampler(self, idx):
+        if self.all_samplers[idx] is not None:
+            self.all_samplers[idx] = None
+            gc.collect()
+            torch.cuda.empty_cache()
 
     def get_presampled_points(self):
         
