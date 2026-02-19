@@ -67,9 +67,10 @@ def cal_GT_hist(n_instances, data_res, chunk_size, data_sampler):
             data_sampler.delete_sampler(batch_idx)
     return hist_cache
 
-def inference(n_instances, data_res, chunk_size, value_range, nets, data_sampler, loaded_model, recon_type):
+def inference(n_instances, data_res, chunk_size, value_range, nets, data_sampler, loaded_model, recon_type, all_timesteps):
     psnr_list = []
     hist_cache = []
+    timestep_list = []
     with torch.no_grad():
         for batch_idx in range(n_instances):
             nets.load_state_dict(loaded_model['net_state_dict'])
@@ -106,12 +107,14 @@ def inference(n_instances, data_res, chunk_size, value_range, nets, data_sampler
             print("idx:", batch_idx, " psnr:", PSNR)
             psnr_list.append(PSNR)
             
+            timestep_list.append(all_timesteps[batch_idx])
+            
             # save the GPU memory 
             del outputs, targets, loss
             torch.cuda.empty_cache()
             # HACK: delete sampler after use, otherwise, would encounter OOM error
             data_sampler.delete_sampler(batch_idx)
-    return psnr_list, hist_cache
+    return psnr_list, hist_cache, timestep_list
 
 if __name__ == "__main__":
 
@@ -146,6 +149,7 @@ if __name__ == "__main__":
     
     psnr_lists = []
     hist_caches = []
+    timestep_lists = []
     
     for config_file_path, SIREN_file_path, recon_type, output_activation in zip(config_files, SIREN_file_paths, SIREN_recon_types, output_activations):
         
@@ -182,9 +186,10 @@ if __name__ == "__main__":
 
         print(f"all timesteps: {all_timesteps}")
 
-        psnr_list, hist_cache = inference(n_instances, data_res, chunk_size, value_range, nets, data_sampler, loaded_model, recon_type)
+        psnr_list, hist_cache, timestep_list = inference(n_instances, data_res, chunk_size, value_range, nets, data_sampler, loaded_model, recon_type, all_timesteps)
         psnr_lists.append(psnr_list)
         hist_caches.append(hist_cache)
+        timestep_lists.append(timestep_list)
     
     # use the light directions from the last loaded model
     # TODO: might need to find more reasonable impl. or just don't support varying length array
@@ -197,7 +202,7 @@ if __name__ == "__main__":
         for j in range(len(psnr_lists)):
             if idx < len(psnr_lists[j]):  # check if this list has enough elements
                 print(f"{args.SIREN_recon_types[j]} PSNR: {psnr_lists[j][idx]}, ", end="")
-                plt.hist(hist_caches[j][idx][1][:-1], hist_caches[j][idx][1], weights=hist_caches[j][idx][0], alpha=0.8, label=f"{args.SIREN_recon_types[j]} (PSNR: {psnr_lists[j][idx].item():0,.4f})", log=True)
+                plt.hist(hist_caches[j][idx][1][:-1], hist_caches[j][idx][1], weights=hist_caches[j][idx][0], alpha=0.8, label=f"{args.SIREN_recon_types[j]} (PSNR: {psnr_lists[j][idx].item():0,.4f} / Timestep: {timestep_lists[j][idx]})", log=True)
             else:
                 print(f"{args.SIREN_recon_types[j]} PSNR: N / A, ", end="")
         print("")
