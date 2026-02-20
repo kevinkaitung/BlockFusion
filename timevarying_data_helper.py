@@ -398,7 +398,7 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
         
         self.if_gradient = if_gradient
         if if_gradient:
-            self.selected_coord_groups, self.selected_value_groups = self.get_larger_grad_norm_points(grad_norm_threshold)
+            self.selected_coord_groups, self.selected_value_groups, self.selected_num_pt_groups = self.get_larger_grad_norm_points(grad_norm_threshold)
             self.num_uniform_samples = sample_batch_size // 4
             self.num_high_grad_norm_samples = sample_batch_size // 4 * 3
         
@@ -506,11 +506,12 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
         from fit_triplane.calculate_gradient import calculate_gradient, calculate_gradient_chunked, calculate_gradient_norm_chunked
         
         resolution = self.resolution
-        chunk_size = 65536*10240
+        chunk_size = 65536*8192
     
         # grad_norms = []
         selected_coord_groups = []
         selected_value_groups = []
+        selected_num_pt_groups = []
         # need to decode the volume first
         for idx in range(self.n_instances):
             print(f"Processing instance {idx}/{self.n_instances}...")
@@ -539,6 +540,7 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
             # NOTE: should normalize selected coords back to 0 to 1!!!
             selected_coords = selected_coords / torch.tensor([resolution[0] - 1, resolution[1] - 1, resolution[2] - 1], dtype=torch.float32)
             selected_coord_groups.append(selected_coords)
+            selected_num_pt_groups.append(selected_coords.shape[0])
             
             del targets, grad_norm, selected_coords
             # NOTE: all of these tensors should be on CPU, probably no need to call cuda empty cache
@@ -546,7 +548,7 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
             ### section end
         
         # NOTE: both coord and value groups should be on CPU (will move them to GPU in each training iteration)
-        return selected_coord_groups, selected_value_groups
+        return selected_coord_groups, selected_value_groups, selected_num_pt_groups
     
     def calculate_view_transform_and_projection_matrices(self):
         

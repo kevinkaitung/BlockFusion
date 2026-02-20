@@ -297,6 +297,10 @@ if __name__ == "__main__":
         batch_size=config.batch_size,
         shuffle=True)
         value_range = train_dataloader.dataset.value_range
+        if if_using_high_grad_points:
+            console_logger.debug(f"Number of points passing gradient norm threshold {grad_norm_threshold} of each instance:")
+            for batch_idx, num_pt in enumerate(train_dataloader.dataset.selected_num_pt_groups):
+                console_logger.debug(f"instance {batch_idx}: {num_pt} points")
         
         nets, optimizer, epoch = training_loop(start_epoch, offset, train_dataloader, value_range, nets, optimizer, config, tensorboard_writer, console_logger)
         
