@@ -503,19 +503,22 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
     def get_larger_grad_norm_points(self, grad_norm_thres=0.5):
         
         from fit_triplane.data_distribution_analyze import generate_coords_chunks
-        from fit_triplane.calculate_gradient import calculate_gradient
+        from fit_triplane.calculate_gradient import calculate_gradient, calculate_gradient_chunked, calculate_gradient_norm_chunked
         
         resolution = self.resolution
-        chunk_size = 65536*8192
+        chunk_size = 65536*10240
     
         # grad_norms = []
         selected_coord_groups = []
         selected_value_groups = []
         # need to decode the volume first
         for idx in range(self.n_instances):
+            print(f"Processing instance {idx}/{self.n_instances}...")
+            # Clear GPU cache before processing each instance
+            torch.cuda.empty_cache()
             targets = []
-            for coord_chunk in generate_coords_chunks(resolution, chunk_size):
-                target = torch.empty([coord_chunk.shape[0], 1]).float().cuda()
+            for coord_chunk in generate_coords_chunks(resolution, chunk_size, device="cuda"):
+                target = torch.empty([coord_chunk.shape[0], 1], dtype=torch.float32, device=coord_chunk.device)
                 decode_shadow(self.sampler, coord_chunk, target, self.light_dir_spherical_normalized[idx], self.tfn)
                 targets.append(target.cpu())
             targets = torch.cat(targets, dim=0)
@@ -523,7 +526,10 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
             
             ### section to generate coords based on grad norm
             # currently only use grad norm
-            _, grad_norm = calculate_gradient(targets)
+            # _, grad_norm = calculate_gradient_chunked(grid=targets, z_chunk_size=128)
+            # more memory efficient by calculating only gradient norm
+            # both targest and grad_norm are on CPU -> but the function would move each chunk to GPU for faster computation
+            grad_norm = calculate_gradient_norm_chunked(grid=targets, z_chunk_size=256)
             # grad_norms.append(grad_norm)
             selected_coords = torch.nonzero(grad_norm > grad_norm_thres)
             print(f"instance {idx}: {selected_coords.shape[0]} points passing the gradient norm threshold")
@@ -533,8 +539,13 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
             # NOTE: should normalize selected coords back to 0 to 1!!!
             selected_coords = selected_coords / torch.tensor([resolution[0] - 1, resolution[1] - 1, resolution[2] - 1], dtype=torch.float32)
             selected_coord_groups.append(selected_coords)
-            ### section end
             
+            del targets, grad_norm, selected_coords
+            # NOTE: all of these tensors should be on CPU, probably no need to call cuda empty cache
+            # torch.cuda.empty_cache()
+            ### section end
+        
+        # NOTE: both coord and value groups should be on CPU (will move them to GPU in each training iteration)
         return selected_coord_groups, selected_value_groups
     
     def calculate_view_transform_and_projection_matrices(self):

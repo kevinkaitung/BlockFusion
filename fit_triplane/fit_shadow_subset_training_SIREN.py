@@ -108,6 +108,11 @@ if __name__ == "__main__":
     parser.add_argument('--selected_light_dirs_file_path', type=str)
     parser.add_argument('--output_activation', type=str, default="None")
     args = parser.parse_args()
+    
+    # fix the random seed for reproducibility
+    seed = 0
+    torch.manual_seed(seed)
+    np.random.seed(seed)
 
     # create directory for saving logs
     base_dir = "../logs"

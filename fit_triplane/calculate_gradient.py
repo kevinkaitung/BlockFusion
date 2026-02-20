@@ -78,6 +78,115 @@ def calculate_gradient(grid: torch.tensor):
     
     return gradients, grad_norm
 
+def calculate_gradient_chunked(grid: torch.Tensor, z_chunk_size=64):
+    """
+    Calculate gradient in Z-axis chunks with proper boundary handling.
+    
+    Strategy:
+    - Each chunk overlaps by 1 slice on each side (for central differences)
+    - Compute gradient for the full chunk including overlap
+    - Extract only the interior result (excluding overlap regions)
+    """
+    Z, Y, X = grid.shape
+    
+    dx_chunks = []
+    dy_chunks = []
+    dz_chunks = []
+    
+    for z_start in range(0, Z, z_chunk_size):
+        z_end = min(z_start + z_chunk_size, Z)
+        
+        # Determine overlap: expand chunk by 1 on each side for central differences
+        z_start_with_overlap = max(0, z_start - 1)
+        z_end_with_overlap = min(Z, z_end + 1)
+        
+        # Extract chunk with overlap
+        chunk = grid[z_start_with_overlap:z_end_with_overlap, :, :].cuda()
+        
+        # Calculate gradients on the overlapped chunk
+        dx_chunk = calculate_dx(chunk)
+        dy_chunk = calculate_dy(chunk)
+        dz_chunk = calculate_dz(chunk)
+        
+        # Determine which slices to keep (strip overlap)
+        # If z_start > 0, we added 1 slice at the beginning, so skip it
+        # If z_end < Z, we added 1 slice at the end, so skip it
+        keep_start = 1 if z_start > 0 else 0
+        keep_end = dz_chunk.shape[0] - (1 if z_end < Z else 0)
+        
+        # Extract interior result (without overlap regions)
+        dx_chunks.append(dx_chunk[keep_start:keep_end].cpu())
+        dy_chunks.append(dy_chunk[keep_start:keep_end].cpu())
+        dz_chunks.append(dz_chunk[keep_start:keep_end].cpu())
+        
+        # Free GPU memory
+        del chunk, dx_chunk, dy_chunk, dz_chunk
+        torch.cuda.empty_cache()
+    
+    # Concatenate all chunks
+    dx = torch.cat(dx_chunks, dim=0)
+    dy = torch.cat(dy_chunks, dim=0)
+    dz = torch.cat(dz_chunks, dim=0)
+    
+    grad_norm = torch.sqrt(dx**2 + dy**2 + dz**2)
+    gradients = torch.stack([dx, dy, dz], dim=-1)
+    
+    print(f"Gradient Shape: {gradients.shape}")
+    print(f"Gradient Norm Shape: {grad_norm.shape}")
+    
+    return gradients, grad_norm
+
+def calculate_gradient_norm_chunked(grid: torch.Tensor, z_chunk_size=128):
+    """
+    Only calculate gradient norm in Z-axis chunks with proper boundary handling.
+    No save gradient for more efficient memory usage.
+    
+    Strategy:
+    - Each chunk overlaps by 1 slice on each side (for central differences)
+    - Compute gradient for the full chunk including overlap
+    - Extract only the interior result (excluding overlap regions)
+    """
+    Z, Y, X = grid.shape
+    
+    norm_chunks = []
+    
+    for z_start in range(0, Z, z_chunk_size):
+        z_end = min(z_start + z_chunk_size, Z)
+        
+        # Determine overlap: expand chunk by 1 on each side for central differences
+        z_start_with_overlap = max(0, z_start - 1)
+        z_end_with_overlap = min(Z, z_end + 1)
+        
+        # Extract chunk with overlap
+        # move chunk to gpu for faster computation
+        chunk = grid[z_start_with_overlap:z_end_with_overlap, :, :].cuda()
+        
+        # Calculate gradients on the overlapped chunk
+        dx_chunk = calculate_dx(chunk)
+        dy_chunk = calculate_dy(chunk)
+        dz_chunk = calculate_dz(chunk)
+        
+        # Determine which slices to keep (strip overlap)
+        # If z_start > 0, we added 1 slice at the beginning, so skip it
+        # If z_end < Z, we added 1 slice at the end, so skip it
+        keep_start = 1 if z_start > 0 else 0
+        keep_end = dz_chunk.shape[0] - (1 if z_end < Z else 0)
+        
+        # Extract interior result (without overlap regions)
+        # move the results back to cpu for storage
+        norm_chunks.append(torch.sqrt(dx_chunk[keep_start:keep_end]**2 + dy_chunk[keep_start:keep_end]**2 + dz_chunk[keep_start:keep_end]**2).cpu())
+        
+        # Free GPU memory
+        del chunk, dx_chunk, dy_chunk, dz_chunk
+        torch.cuda.empty_cache()
+    
+    # Concatenate all chunks
+    grad_norm = torch.cat(norm_chunks, dim=0)
+    
+    print(f"Gradient Norm Shape: {grad_norm.shape}")
+    
+    return grad_norm
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     
