@@ -174,6 +174,9 @@ if __name__ == "__main__":
     assert args.n_instances % config.batch_size == 0, "Number of instances must be divisible by batch size"
     offsets = []
     
+    if_using_high_grad_points = config.get("if_using_high_grad_points", False)
+    grad_norm_threshold = config.get("grad_norm_threshold", 0.5)
+    
     ### section to pre-optimize a set of SIREN as the initial weights of the rest of the SIREN sets
     sample_config = edict({
         "max_iters": 200,
@@ -190,8 +193,9 @@ if __name__ == "__main__":
             sample_batch_size=config.sample_batch_size,
             light_dir_cartesian=all_lighting_dirs_cartesian[:1],
             # only specify when you need importance sampling on larger gradient points
-            # resolution=args.dims,
-            # if_gradient=True
+            resolution=args.dims,
+            if_gradient=if_using_high_grad_points,
+            grad_norm_threshold=grad_norm_threshold
         ),
         batch_size=1,
         shuffle=True)
@@ -281,8 +285,9 @@ if __name__ == "__main__":
             sample_batch_size=config.sample_batch_size,
             light_dir_cartesian=subset_model['light_dir_cartesian'],
             # only specify when you need importance sampling on larger gradient points
-            # resolution=args.dims,
-            # if_gradient=True
+            resolution=args.dims,
+            if_gradient=if_using_high_grad_points,
+            grad_norm_threshold=grad_norm_threshold
         ),
         batch_size=config.batch_size,
         shuffle=True)
