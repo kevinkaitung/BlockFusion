@@ -287,7 +287,7 @@ if __name__ == "__main__":
                 sample_batch_size=config.sample_batch_size,
                 light_dir_cartesian=subset_model['light_dir_cartesian'],
                 resolution=args.dims,
-                if_view_transform=True
+                # if_view_transform=True
             ),
             batch_size=config.batch_size,
             shuffle=True)
