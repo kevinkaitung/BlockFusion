@@ -32,10 +32,12 @@ if __name__ == "__main__":
     data_res = args.dims
     
     # create RandomlyGenerateLightDir just to get the pre-sample coords and values
-    dataset = RandomlyGenerateLightDir(sampler=sampler, n_instances=len(light_dirs), tfn=args.tfn_file_path, sample_batch_size=None, light_dir_cartesian=light_dirs, resolution=data_res, if_gradient=True)
-    
-    coord_groups = dataset.selected_coord_groups
-    value_groups = dataset.selected_value_groups
+    # no use of high grad points, so give if_gradient false
+    dataset = RandomlyGenerateLightDir(sampler=sampler, n_instances=len(light_dirs), 
+                                       tfn=args.tfn_file_path, sample_batch_size=None, 
+                                       light_dir_cartesian=light_dirs, resolution=data_res, if_gradient=False)
+    # instead, directly call get_uniformly_sampled_points to get presampled points
+    coord_groups, value_groups = dataset.get_uniformly_sampled_points()
     
     # coord_groups and value_groups are the lists of tensor
     loaded_model['pre_sampled_coord_groups']=coord_groups
