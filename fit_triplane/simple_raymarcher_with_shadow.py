@@ -17,6 +17,8 @@ from typing import Optional, Any
 import json5
 from networks import NeurCompNet
 from easydict import EasyDict as edict
+import os
+import matplotlib.pyplot as plt
 # ---------------------------------------------------------------------------
 # Camera / Scene config
 # ---------------------------------------------------------------------------
@@ -38,6 +40,8 @@ class MarchConfig:
     t_far:      float = 10.0
     n_samples:  int   = 128
     density_threshold: float = 1e-4
+    patch_width: int = 16
+    patch_height: int = 16
 
 # ---------------------------------------------------------------------------
 # Transfer Function
@@ -237,8 +241,8 @@ def ray_march(
     tfn_file:       str,
     scene_aabb:     Optional[torch.Tensor] = None,  # (2, 3) [min, max] in world
     light_dir_normalized: list = [0.25, 0.25],
-    nets: Any = None   
-) -> dict:
+    nets: Any = None   # if nets is not provided, fallback to use GT shadow sampler
+):
     """
     Volume render with naive shadow blending.
 
@@ -297,10 +301,10 @@ def ray_march(
     shadow_flat  = torch.zeros([pts_flat.shape[0], 1], device=device)   # (H*W*N, S)
     
     decode(sampler, pts_flat, density_flat)
-    # decode_shadow(sampler, pts_flat, shadow_flat, light_dir_normalized, tfn_file)
-    with torch.no_grad():
-        for batch in range(pts_flat.shape[0] // 65536 + 1):
-            shadow_flat[batch*65536:(batch+1)*65536] = nets(pts_flat[batch*65536:(batch+1)*65536])
+    if nets is None:
+        decode_shadow(sampler, pts_flat, shadow_flat, light_dir_normalized, tfn_file)
+    else:
+        shadow_flat = nets(pts_flat)
 
     # zero out any outside points that decode might have affected
     density_flat[~inside_mask] = 0.0
@@ -348,16 +352,16 @@ def ray_march(
 
     # -- final compositing --
     rendered_rgb    = (weights * rgb).sum(dim=2)                     # (H, W, 3)
-    rendered_shadow = (weights * shadow).sum(dim=2)                  # (H, W, S)
-    opacity         = weights.sum(dim=2)                             # (H, W, 1)
-    depth           = (weights * t_vals.unsqueeze(-1)).sum(dim=2)    # (H, W, 1)
-    
+    # rendered_shadow = (weights * shadow).sum(dim=2)                  # (H, W, S)
+    # opacity         = weights.sum(dim=2)                             # (H, W, 1)
+    # depth           = (weights * t_vals.unsqueeze(-1)).sum(dim=2)    # (H, W, 1)
+    return rendered_rgb
     return {
         'rendered_rgb':    rendered_rgb,     # (H, W, 3)
-        'rendered_shadow': rendered_shadow,  # (H, W, S)
-        'opacity':         opacity,          # (H, W, 1)
-        'depth':           depth,            # (H, W, 1)
-        'weights':         weights,          # (H, W, N, 1)
+        # 'rendered_shadow': rendered_shadow,  # (H, W, S)
+        # 'opacity':         opacity,          # (H, W, 1)
+        # 'depth':           depth,            # (H, W, 1)
+        # 'weights':         weights,          # (H, W, N, 1)
     }
 
 
@@ -375,7 +379,7 @@ def render(
     tfn_file:     str,
     light_dir_normalized: list,
     nets: Any
-) -> dict:
+):
     """
     End-to-end render.  Loads placeholder volumes, generates rays, ray-marches.
     """
@@ -411,15 +415,15 @@ if __name__ == '__main__':
         # look_at  = torch.tensor([0.5, 0.5,  0.5]),
         # up       = torch.tensor([0.0, 1.0,  0.0]),
         # for spider
-        position = torch.tensor([-0.175, -0.525, -0.025]),
-        look_at  = torch.tensor([0.5, 0.4,  0.5]),
+        position = torch.tensor([-0.085, -0.31, -0.012]),
+        look_at  = torch.tensor([0.45, 0.4,  0.5]),
         up       = torch.tensor([0.1, 0.342,  -0.93]),
         # position = torch.tensor([-1.0394, 2.5554, 2.5044]),
         # look_at  = torch.tensor([0.5-0.004525, 0.5-0.3158,  1.1093]),
         # up       = torch.tensor([0.3800, 0.8572,  -0.341]),
         fov_y    = 60.0,
-        width    = 400,
-        height   = 400,
+        width    = 384,
+        height   = 384,
     )
 
     aabb = torch.tensor([[0., 0., 0.], [1., 1., 1.]])
@@ -431,9 +435,11 @@ if __name__ == '__main__':
         # n_samples = 1024,
         # for spider
         # NOTE: might be okay to clip volume a little bit as we just want the majority of the rendered volume for calculating rendering loss
-        t_near    = 0.8,
-        t_far     = 1.5,
+        t_near    = 0.6,
+        t_far     = 1.3,
         n_samples = 1024,
+        patch_width=16,
+        patch_height=16,
     )
 
     # raw_data_file_path = "/home/kctung/Projects/BlockFusion/datasets/MechHand_f_640x220x229.raw"
@@ -476,26 +482,38 @@ if __name__ == '__main__':
     nets = nets[0]
 
     tfn_lut = build_transfer_function(colorControls, opacityControl, lut_size=1024)
-    result = render(cam, sampler, tfn_lut, scene_aabb=aabb, cfg=cfg, device=device, tfn_file=tfn_file_path, light_dir_normalized=light_dir_normalized, nets=nets)
+    # result = patchify_render_training(cam, sampler, tfn_lut, scene_aabb=aabb, cfg=cfg, device=device, GT_image=torch.zeros([cam.height, cam.width, 3], device=device, dtype=torch.float32), nets=nets)
+    # render GT image
+    result = render(cam, sampler, tfn_lut, scene_aabb=aabb, cfg=cfg, device=device, tfn_file=tfn_file_path, light_dir_normalized=light_dir_normalized, nets=None)
     # import pdb; pdb.set_trace()
     # print("rendered_shadow:", result['rendered_shadow'].shape)   # (64, 64, 1)
     # print("opacity:        ", result['opacity'].shape)           # (64, 64, 1)
     # print("depth:          ", result['depth'].shape)             # (64, 64, 1)
     print("Smoke test passed.")
+    print(f"max memory allocated: {torch.cuda.max_memory_allocated()/1024**3:.2f} GB")
+    print(f"max memory reserved: {torch.cuda.max_memory_reserved()/1024**3:.2f} GB")
     
-    import matplotlib.pyplot as plt
-    for key_name, image_name in zip(['rendered_rgb', 'rendered_shadow', 'opacity'], ['full_render', 'shadow_map', 'opacity_map']):
-        data = result[key_name]
-        plt.figure(figsize=(7, 7))
-        # Convert to numpy if tensor
-        if torch.is_tensor(data):
-            data = data.cpu().numpy()
-        # Plot with colorbar
-        if data.shape[-1] == 3:
-            im = plt.imshow(data)
-        else:
-            im = plt.imshow(data, cmap='viridis')
-        cbar = plt.colorbar()
-        plt.title(image_name)
-        plt.savefig(f"{image_name}.png")
-        plt.close()
+    save_dir = "/home/kctung/Projects/BlockFusion/logs/rendering_loss_dev_exp"
+    
+    data = result
+    plt.figure(figsize=(7, 7))
+    # Convert to numpy if tensor
+    if torch.is_tensor(data):
+        data = data.detach().cpu().numpy()
+    # Plot with colorbar
+    if data.shape[-1] == 3:
+        im = plt.imshow(data)
+    else:
+        im = plt.imshow(data, cmap='viridis')
+    # cbar = plt.colorbar()
+    plt.title("Full render with shadow")
+    plt.savefig(os.path.join(save_dir,"Full_render_with_shadow.png"))
+    plt.close()
+    
+    # to generate GT data
+    result_to_save = dict()
+    # HACK: only one sample now
+    result_to_save["GT_image"] = result
+    result_to_save["light_dir_spherical_normalized"] = light_dir_normalized
+    # save image tensor as pt file
+    torch.save(result_to_save, os.path.join(save_dir, "GT_image.pt"))
