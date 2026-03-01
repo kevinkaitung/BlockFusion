@@ -4,6 +4,7 @@ import numpy as np
 from pathlib import Path
 import sys
 from tqdm import tqdm
+from dataclasses import asdict
 
 current_dir = os.path.abspath(os.path.dirname(__file__))
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -155,6 +156,35 @@ if __name__ == "__main__":
     
     # save pre-calculated GT images
     pretrained_SIREN["pre_cal_GT_images"] = pre_cal_GT_images
+    
+    # save all camera and marching configs
+    # TODO: integrate with the above code
+    camera_configs = []
+    aabb_configs = []
+    march_configs = []
+    for batch_idx, (cam_position, t_near_far) in enumerate(zip(fibonacci_points, ts_near_far)):
+        camera_configs.append(asdict(Camera(
+            position = cam_position,
+            look_at  = torch.tensor([0.5, 0.5,  0.5]),
+            up       = torch.tensor([0.0, 1.0,  0.0]),
+            fov_y    = 60.0,
+            width    = 384,
+            height   = 384,
+        )))
+        aabb_configs.append(torch.tensor([[0., 0., 0.], [1., 1., 1.]]))
+        march_configs.append(asdict(MarchConfig(
+            t_near    = t_near_far[0],
+            t_far     = t_near_far[1],
+            n_samples = 1024,
+            # no use of patch
+            patch_width=16,
+            patch_height=16,
+        )))
+    
+    pretrained_SIREN["camera_configs"] = camera_configs
+    pretrained_SIREN["aabb_configs"] = aabb_configs
+    pretrained_SIREN["march_configs"] = march_configs
+    
     torch.save(pretrained_SIREN, os.path.join(save_dir, f"{pretrained_SIREN_file_path_stem}_w_GT_imgs.pt"))
     
     print(f"max memory allocated: {torch.cuda.max_memory_allocated()/1024**3:.2f} GB")
