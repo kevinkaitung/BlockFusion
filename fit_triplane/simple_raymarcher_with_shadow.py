@@ -166,6 +166,8 @@ def generate_rays(camera: Camera, device: torch.device):
 
     # Build orthonormal camera basis
     forward = F.normalize(camera.look_at - camera.position, dim=0)
+    if abs(torch.dot(forward, camera.up).item()) > 0.99:
+        camera.up = torch.tensor([0.0, 0.0, 1.0])
     right   = F.normalize(torch.linalg.cross(forward, camera.up), dim=0)
     up_     = torch.linalg.cross(right, forward)          # reorthogonalise
 
@@ -364,6 +366,18 @@ def ray_march(
         # 'weights':         weights,          # (H, W, N, 1)
     }
 
+def test_whether_ray_start_in_volume(ray_origins, ray_directions, scene_aabb, cfg):
+    
+    first_hit = ray_origins + ray_directions * cfg.t_near
+
+    scene_aabb = scene_aabb.to(ray_origins.device)
+
+    inside_mask = ((first_hit >= scene_aabb[0]) &
+               (first_hit <= scene_aabb[1])).all(dim=-1)
+    
+    # if any first hit points are inside the volume, return true
+    return inside_mask.any()
+
 
 # ---------------------------------------------------------------------------
 # Full render pass
@@ -385,6 +399,9 @@ def render(
     """
     
     ray_origins, ray_directions = generate_rays(camera, device)
+
+    if test_whether_ray_start_in_volume(ray_origins, ray_directions, scene_aabb, cfg):
+        print("The ray sampled points start in volumes, which means near clipping plane might clip the volume.")
 
     result = ray_march(
         ray_origins    = ray_origins,

@@ -19,8 +19,8 @@ args = parser.parse_args()
 #  1558, 1582, 1588, 1590, 1640, 1676, 1677, 1724, 1732, 1735, 1752, 1763, 1767,
 #  1769, 1800, 1805, 1816, 1826, 1841, 1853, 1879, 1909, 1935, 1961, 2000, 2008,
 #  2068, 2071, 2091]
-# indices=[idx for idx in range(256)]
-indices = [527, 472, 445, 399, 464, 156, 444, 266, 109, 342, 283, 67, 345, 550, 230, 506]
+indices=[idx for idx in range(256)]
+# indices = [527, 472, 445, 399, 464, 156, 444, 266, 109, 342, 283, 67, 345, 550, 230, 506]
 print(indices)
 
 old_model = torch.load(os.path.join(args.model_dir, args.filename))
@@ -40,6 +40,10 @@ if 'light_dir_cartesian' in old_model.keys():
     new_model['light_dir_cartesian'] = [old_model['light_dir_cartesian'][i] for i in indices]
 elif 'timesteps' in old_model.keys():
     new_model['timesteps'] = [old_model['timesteps'][i] for i in indices]
+
+if 'pre_sampled_coord_groups' in old_model.keys():
+    new_model['pre_sampled_coord_groups'] = [old_model['pre_sampled_coord_groups'][i] for i in indices]
+    new_model['pre_sampled_value_groups'] = [old_model['pre_sampled_value_groups'][i] for i in indices]
 
 # get the layer keys first
 layer_keys = []
