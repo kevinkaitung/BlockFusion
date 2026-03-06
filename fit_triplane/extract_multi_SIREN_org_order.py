@@ -19,7 +19,7 @@ args = parser.parse_args()
 #  1558, 1582, 1588, 1590, 1640, 1676, 1677, 1724, 1732, 1735, 1752, 1763, 1767,
 #  1769, 1800, 1805, 1816, 1826, 1841, 1853, 1879, 1909, 1935, 1961, 2000, 2008,
 #  2068, 2071, 2091]
-indices=[idx for idx in range(256)]
+indices=[idx for idx in range(64)]
 # indices = [527, 472, 445, 399, 464, 156, 444, 266, 109, 342, 283, 67, 345, 550, 230, 506]
 print(indices)
 
@@ -44,6 +44,11 @@ elif 'timesteps' in old_model.keys():
 if 'pre_sampled_coord_groups' in old_model.keys():
     new_model['pre_sampled_coord_groups'] = [old_model['pre_sampled_coord_groups'][i] for i in indices]
     new_model['pre_sampled_value_groups'] = [old_model['pre_sampled_value_groups'][i] for i in indices]
+if 'pre_cal_GT_images' in old_model.keys():
+    new_model['pre_cal_GT_images'] = [old_model['pre_cal_GT_images'][i] for i in indices]
+    new_model['camera_configs'] = old_model['camera_configs']
+    new_model['aabb_configs'] = old_model['aabb_configs']
+    new_model['march_configs'] = old_model['march_configs']
 
 # get the layer keys first
 layer_keys = []

@@ -23,6 +23,7 @@ if __name__ == "__main__":
     parser.add_argument('--raw_data_file_path', type=str, default="/media/data/qadwu/volume/vortices/vorts1.data")
     parser.add_argument('--tfn_file_path', type=str, default="/home/kctung/Projects/instant-vnr-pytorch/bindings/ovr/data/configs/vorts_shadow.json")
     parser.add_argument('--pretrained_SIREN_file_path', type=str)
+    parser.add_argument('--image_resolution', type=int, nargs=2, default=[128, 128])
     
     args = parser.parse_args()
     
@@ -54,6 +55,7 @@ if __name__ == "__main__":
     # fibonacci_points = fibonacci_sphere(32)
     # fibonacci_points = fibonacci_points.astype(np.float32)
     # pre-select some of the points (more front-facing points)
+    # for spider dataset
     fibonacci_points = [
        [-0.06371014, -0.96875   ,  0.23971745],
        [-0.19591164, -0.90625   , -0.37460588],
@@ -88,9 +90,24 @@ if __name__ == "__main__":
     #    [-0.41648776,  0.90625   , -0.07244915], 30
        [ 0.20890468,  0.96875   , -0.13372461]
     ]
+    # for mechhand dataset
+    fibonacci_points = [
+        [-0.48411712, -0.875,      -0.00236781],
+        [ 0.5781805,  -0.625,      -0.52448285],
+        [ 0.23627819, -0.375,       0.8964082 ],
+        [-0.83452296, -0.125,      -0.5366064 ],
+        [ 0.9778237,   0.125,      -0.16803534],
+        [-0.5676294,   0.375,       0.7329201 ],
+        [-0.06444251,  0.625,      -0.77796024],
+        # [ 0.35537347,  0.875,       0.32876238],
+    ]
     ts_near_far = [
         [0.3, 1.5] for _ in range(len(fibonacci_points))
     ]
+    # # permute indices from spider for mechhand
+    # old selection (leave here just for record)
+    # perm_indices = [12, 14, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 16, 17, 18, 19]
+    # fibonacci_points = [fibonacci_points[perm_idx] for perm_idx in perm_indices]
 
     # prepare scene configuration
     cam = Camera(
@@ -99,8 +116,8 @@ if __name__ == "__main__":
         look_at  = torch.tensor([0.5, 0.5,  0.5]),
         up       = torch.tensor([0.0, 1.0,  0.0]),
         fov_y    = 60.0,
-        width    = 384,
-        height   = 384,
+        width    = args.image_resolution[0],
+        height   = args.image_resolution[1],
     )
     aabb = torch.tensor([[0., 0., 0.], [1., 1., 1.]])
     cfg = MarchConfig(
@@ -142,12 +159,12 @@ if __name__ == "__main__":
                 result = render(cam, sampler, tfn_lut, scene_aabb=aabb, cfg=cfg, device="cuda", tfn_file=tfn_file_path, light_dir_normalized=light_dir_normalized, nets=None)
 
                 # save GT images for some instances
-                if instance_idx == 100 or instance_idx == 200:
+                if instance_idx == 0 or instance_idx == 100 or instance_idx == 200:
                     plt.figure(figsize=(7, 7))
                     data = result.detach().cpu().numpy()
                     im = plt.imshow(data)
                     plt.title(f"Full render with shadow from camera pos: {cam_position}")
-                    plt.savefig(os.path.join(save_dir,f"GT_image_ins_{instance_idx}_cam_{batch_idx}.png"))
+                    plt.savefig(os.path.join(save_dir,f"GT_{args.image_resolution[0]}x{args.image_resolution[1]}_image_ins_{instance_idx}_cam_{batch_idx}.png"))
                     plt.close()
                 
                 GT_images_this_instance.append(result.cpu())
@@ -165,27 +182,27 @@ if __name__ == "__main__":
     for batch_idx, (cam_position, t_near_far) in enumerate(zip(fibonacci_points, ts_near_far)):
         camera_configs.append(asdict(Camera(
             position = cam_position,
-            look_at  = torch.tensor([0.5, 0.5,  0.5]),
-            up       = torch.tensor([0.0, 1.0,  0.0]),
-            fov_y    = 60.0,
-            width    = 384,
-            height   = 384,
+            look_at  = cam.look_at,
+            up       = cam.up,
+            fov_y    = cam.fov_y,
+            width    = cam.width,
+            height   = cam.height,
         )))
         aabb_configs.append(torch.tensor([[0., 0., 0.], [1., 1., 1.]]))
         march_configs.append(asdict(MarchConfig(
             t_near    = t_near_far[0],
             t_far     = t_near_far[1],
-            n_samples = 1024,
+            n_samples = cfg.n_samples,
             # no use of patch
-            patch_width=16,
-            patch_height=16,
+            patch_width=cfg.patch_width,
+            patch_height=cfg.patch_height,
         )))
     
     pretrained_SIREN["camera_configs"] = camera_configs
     pretrained_SIREN["aabb_configs"] = aabb_configs
     pretrained_SIREN["march_configs"] = march_configs
     
-    torch.save(pretrained_SIREN, os.path.join(save_dir, f"{pretrained_SIREN_file_path_stem}_w_GT_imgs.pt"))
+    torch.save(pretrained_SIREN, os.path.join(save_dir, f"{pretrained_SIREN_file_path_stem}_w_GT_{args.image_resolution[0]}x{args.image_resolution[1]}_imgs.pt"))
     
     print(f"max memory allocated: {torch.cuda.max_memory_allocated()/1024**3:.2f} GB")
     print(f"max memory reserved: {torch.cuda.max_memory_reserved()/1024**3:.2f} GB")
