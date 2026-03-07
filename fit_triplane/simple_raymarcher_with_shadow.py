@@ -5,17 +5,25 @@ PyTorch Ray Marcher with:
   - Volume rendering via alpha compositing
   - Trilinear interpolation of volume/shadow data
 """
+import warnings
 try:
     from pysampler import decode_shadow, decode, create_sampler
 except ImportError:
-    pass
+    warnings.warn(
+        "Cannot import dvnr sampler. "
+        "Only support pytorch implementation for volume scalar values sampling. No shadow coefficients sampling."
+    )
 
 import torch
 import torch.nn.functional as F
 from dataclasses import dataclass
 from typing import Optional, Any
 import json5
-from networks import NeurCompNet
+try:
+    from networks import NeurCompNet
+except ImportError:
+    # HACK: to solve importing from different repos
+    from assess_geometry_loss import NeurCompNet
 from easydict import EasyDict as edict
 import os
 import matplotlib.pyplot as plt
@@ -213,19 +221,18 @@ def sample_volume_trilinear(
     orig_shape  = points.shape[:-1]
 
     # grid_sample expects (N, C, D, H, W) and grid in [-1, 1]
-    vol = volume.permute(3, 2, 1, 0).unsqueeze(0)   # (1, C, D, H, W) — note z/x swap
+    vol = volume.permute(3, 0, 1, 2).unsqueeze(0)   # (1, C, D, H, W) — swap dim C to the second dim
     vol = vol.float()
 
     # Remap [0,1] → [-1, 1]
-    grid = (points.reshape(1, -1, 1, 1, 3) * 2 - 1).float()   # (1, N, 1, 1, 3)
-
+    grid = (points.reshape(1, -1, 1, 1, 3).mul_(2).sub_(1)).float()   # (1, N, 1, 1, 3)
     sampled = F.grid_sample(
         vol, grid,
         mode='bilinear',          # trilinear in 5-D
-        padding_mode='border',
-        align_corners=True,
+        padding_mode='zeros',     # set to align with dvnr sampler
+        align_corners=False,
     )                              # (1, C, N, 1, 1)
-
+    
     sampled = sampled.squeeze(0).squeeze(-1).squeeze(-1)   # (C, N)
     return sampled.T.reshape(*orig_shape, C)               # (..., C)
 
@@ -243,7 +250,8 @@ def ray_march(
     tfn_file:       str,
     scene_aabb:     Optional[torch.Tensor] = None,  # (2, 3) [min, max] in world
     light_dir_normalized: list = [0.25, 0.25],
-    nets: Any = None   # if nets is not provided, fallback to use GT shadow sampler
+    nets: Any = None,   # if nets is not provided, fallback to use GT shadow sampler
+    # volume_tensor: Any = None
 ):
     """
     Volume render with naive shadow blending.
@@ -303,6 +311,7 @@ def ray_march(
     shadow_flat  = torch.zeros([pts_flat.shape[0], 1], device=device)   # (H*W*N, S)
     
     decode(sampler, pts_flat, density_flat)
+    # density_flat = sample_volume_trilinear(volume_tensor, pts_flat)
     if nets is None:
         decode_shadow(sampler, pts_flat, shadow_flat, light_dir_normalized, tfn_file)
     else:
@@ -392,7 +401,8 @@ def render(
     device:       torch.device,
     tfn_file:     str,
     light_dir_normalized: list,
-    nets: Any
+    nets: Any,
+    # volume_tensor: Any,
 ):
     """
     End-to-end render.  Loads placeholder volumes, generates rays, ray-marches.
@@ -412,7 +422,8 @@ def render(
         tfn_file       = tfn_file,
         scene_aabb     = scene_aabb,
         light_dir_normalized=light_dir_normalized,
-        nets = nets
+        nets = nets,
+        # volume_tensor=volume_tensor,
     )
     return result
 
