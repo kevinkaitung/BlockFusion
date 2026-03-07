@@ -101,6 +101,17 @@ if __name__ == "__main__":
         [-0.06444251,  0.625,      -0.77796024],
         # [ 0.35537347,  0.875,       0.32876238],
     ]
+    # for spider dataset
+    fibonacci_points = [
+        [-0.48411712, -0.875,      -0.00236781],
+        [ 0.5781805,  -0.625,      -0.52448285],
+        [ 0.23627819, -0.375,       0.8964082 ],
+        [-0.83452296, -0.125,      -0.5366064 ],
+        [ 0.9778237,   0.125,      -0.16803534],
+        [-0.69733713, -0.59375   , -0.40147461],
+        [-0.06444251,  0.625,      -0.77796024],
+        # [ 0.35537347,  0.875,       0.32876238],
+    ]
     ts_near_far = [
         [0.3, 1.5] for _ in range(len(fibonacci_points))
     ]
@@ -108,6 +119,22 @@ if __name__ == "__main__":
     # old selection (leave here just for record)
     # perm_indices = [12, 14, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 16, 17, 18, 19]
     # fibonacci_points = [fibonacci_points[perm_idx] for perm_idx in perm_indices]
+
+    # NOTE: used when using pytorch impl. for sampling
+    # # ---- read raw file ----
+    # volume_np = np.fromfile(args.raw_data_file_path, dtype=np.float32)
+    # # reshape to 3D
+    # volume_np = volume_np.reshape((resolution[2], resolution[1], resolution[0]))
+    # # convert to torch tensor
+    # volume_tensor = torch.from_numpy(volume_np)
+    # # normalize volume to 0~1 with in-place operations to save memory usage            
+    # volume_min = volume_tensor.min()
+    # volume_max = volume_tensor.max()
+    # volume_tensor.sub_(volume_min)
+    # volume_tensor.div_(volume_max - volume_min)
+    # # create additional dimension for channel (channel dim in this case is 1)
+    # volume_tensor = volume_tensor.unsqueeze(-1) # (D, H, W, C)
+    # volume_tensor = volume_tensor.to("cuda")
 
     # prepare scene configuration
     cam = Camera(
@@ -157,6 +184,7 @@ if __name__ == "__main__":
             
                 # render GT image
                 result = render(cam, sampler, tfn_lut, scene_aabb=aabb, cfg=cfg, device="cuda", tfn_file=tfn_file_path, light_dir_normalized=light_dir_normalized, nets=None)
+                # result = render(cam, sampler, tfn_lut, scene_aabb=aabb, cfg=cfg, device="cuda", tfn_file=tfn_file_path, light_dir_normalized=light_dir_normalized, nets=None, volume_tensor=volume_tensor)
 
                 # save GT images for some instances
                 if instance_idx == 0 or instance_idx == 100 or instance_idx == 200:
