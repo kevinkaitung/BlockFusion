@@ -206,7 +206,8 @@ def generate_rays(camera: Camera, device: torch.device):
 # ---------------------------------------------------------------------------
 # Trilinear sampler for arbitrary (D, H, W, C) volumes
 # ---------------------------------------------------------------------------
-
+# NOTE: not sure why scalar values sampled from this function can not produce correct GT rendered images
+# TODO: need to carefully verify the correctness of this function, and how it is different from our sampler
 def sample_volume_trilinear(
     volume: torch.Tensor,   # (D, H, W, C)  — last dim is channels
     points: torch.Tensor,   # (..., 3)       — coords in [0, 1]^3  (x, y, z)
@@ -427,6 +428,72 @@ def render(
     )
     return result
 
+def ray_march_with_precalculated_pts(
+        ray_sampled_pts:    torch.Tensor,   # (n_rays, N, 4)
+        inside_mask:        torch.Tensor,   # (n_rays, N)
+        sampler:            Any,
+        tfn_lut:            torch.Tensor,   # (lut_size, 4)
+        cfg:                MarchConfig,
+        tfn_file:           str,
+        light_dir_normalized: list = [0.25, 0.25],
+    ):
+        device = ray_sampled_pts.device
+        
+        pts_flat = ray_sampled_pts.reshape(-1, 4)   # (n_rays*N, 4)
+        inside_mask = inside_mask.flatten()     # (n_rays*N)
+        
+        # density_flat = torch.zeros([pts_flat.shape[0], 1], device=device)   # (n_rays*N, 1)
+        # decode(self.sampler, pts_flat, density_flat)
+        
+        density_flat = pts_flat[:, 3:]      # (n_rays*N, 1)
+        pts_coords = pts_flat[:, :3].clone()
+        shadow_flat  = torch.zeros([pts_flat.shape[0], 1], device=device)   # (n_rays*N, 1)
+        decode_shadow(sampler, pts_coords, shadow_flat, light_dir_normalized, tfn_file)
+        
+        # zero out any outside points that decode might have affected
+        # density_flat[~inside_mask] = 0.0
+        shadow_flat[~inside_mask]  = 0.0
+        
+        # del inside_mask
+        # torch.cuda.empty_cache()
+
+        density = density_flat.reshape(-1, cfg.n_samples, 1)          # (n_rays, N, 1)
+        shadow  = shadow_flat.reshape(-1, cfg.n_samples, 1)          # (n_rays, N, 1)
+
+        # -- transfer function lookup --
+        rgba    = sample_transfer_function(tfn_lut, density)    # (n_rays, N, 1, 4)
+        rgba    = rgba.squeeze(2)                                    # (n_rays, N, 4)
+        rgb     = rgba[..., :3]                                      # (n_rays, N, 3)
+        alpha   = rgba[..., 3:]                                       # (n_rays, N, 1)
+
+        # -- opacity correction for actual step size --
+        # step_size = (cfg.t_far - cfg.t_near) / cfg.n_samples
+        # alpha   = opacity_correction(alpha, step=step_size)        # (H, W, N)
+
+        # -- shadow blending: modulate rgb by shadow coefficient --
+        shadow = shadow.clamp(0.0, 1.0)             # (n_rays, N, 1)
+        ambient = 1.4
+        
+        # should copy rgb n_batch times
+        rgb = torch.lerp(rgb * ambient,
+                        rgb * ambient * shadow,
+                        0.9)                   # (n_rays, N, 3)
+        
+        alpha_c = alpha     # (n_rays, N, 1)
+        
+        transmittance = torch.cumprod(
+            torch.cat([
+                torch.ones(alpha_c.shape[0], 1, 1, device=device), # T_0 = 1 (no occlusion yet)
+                1.0 - alpha_c + 1e-10                                    # (n_rays, N, 1)
+            ], dim=1),
+            dim=1
+        )[:, :-1, :]                                                  # (n_rays, N, 1) drop the last
+        
+        weights = transmittance * alpha_c                             # (n_rays, N, 1)
+
+        # -- final compositing --
+        rendered_rgb = (weights * rgb).sum(dim=1)          # (n_rays, 3)
+        return rendered_rgb
 
 # ---------------------------------------------------------------------------
 # Quick smoke test
