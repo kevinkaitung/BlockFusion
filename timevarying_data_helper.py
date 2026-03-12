@@ -470,32 +470,17 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
     
     def get_uniformly_sampled_points(self, num_samples=500000):
         
-        from fit_triplane.data_distribution_analyze import generate_coords_chunks
-        
-        resolution = self.resolution
-        chunk_size = 65536*8192
-    
         # grad_norms = []
         selected_coord_groups = []
         selected_value_groups = []
         # need to decode the volume first
         for idx in range(self.n_instances):
-            targets = []
-            for coord_chunk in generate_coords_chunks(resolution, chunk_size):
-                target = torch.empty([coord_chunk.shape[0], 1]).float().cuda()
-                decode_shadow(self.sampler, coord_chunk, target, self.light_dir_spherical_normalized[idx], self.tfn)
-                targets.append(target.cpu())
-            targets = torch.cat(targets, dim=0)
-            targets = targets.reshape([resolution[2], resolution[1], resolution[0]])
-                    
-            ### section to uniformly generate coords
-            selected_coords = torch.rand([num_samples, 3], dtype=torch.float32) * torch.tensor([resolution[0] - 1, resolution[1] - 1, resolution[2] - 1], dtype=torch.float32)
-            selected_value_groups.append(targets[selected_coords[:, 2].int(), selected_coords[:, 1].int(), selected_coords[:, 0].int()])
-            # NOTE: should normalize selected coords back to 0 to 1!!!
-            selected_coords = selected_coords / torch.tensor([resolution[0] - 1, resolution[1] - 1, resolution[2] - 1], dtype=torch.float32)
-            selected_coord_groups.append(selected_coords)
-            print(f"instance {idx}: {selected_coords.shape[0]} points passing the gradient norm threshold")
-            ### section end
+            selected_coords = torch.rand([num_samples, 3], dtype=torch.float32, device="cuda")
+            target = torch.empty([selected_coords.shape[0], 1], dtype=torch.float32, device="cuda")
+            decode_shadow(self.sampler, selected_coords, target, self.light_dir_spherical_normalized[idx], self.tfn)
+            selected_coord_groups.append(selected_coords.cpu())
+            selected_value_groups.append(target.cpu())
+            print(f"instance {idx}: selecting {selected_coords.shape[0]} uniformly sampled points")
             
         return selected_coord_groups, selected_value_groups
     

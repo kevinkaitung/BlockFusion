@@ -1,3 +1,4 @@
+from pysampler import create_sampler
 import sys, os
 # Add parent directory to sys.path
 # TODO: make it more flexible to call timevarying_data_helper anywhere
@@ -10,7 +11,6 @@ if parent_dir not in sys.path:
 
 from timevarying_data_helper import *
 import argparse
-from pysampler import create_sampler
 from pathlib import Path
 
 if __name__ == "__main__":
