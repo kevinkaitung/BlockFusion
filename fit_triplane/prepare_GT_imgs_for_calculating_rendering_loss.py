@@ -163,9 +163,12 @@ if __name__ == "__main__":
     with open(args.rendered_imgs_view_angles_file_path, 'r') as f:
         view_angles_file = json5.load(f)
     fibonacci_points = view_angles_file["fibonacci_points"]
-    ts_near_far = [
-        [0.3, 1.5] for _ in range(len(fibonacci_points))
-    ]
+    if "ts_near_far" in view_angles_file.keys():
+        ts_near_far = view_angles_file["ts_near_far"]
+    else:
+        ts_near_far = [
+            [0.3, 1.5] for _ in range(len(fibonacci_points))
+        ]
     # # permute indices from spider for mechhand
     # old selection (leave here just for record)
     # perm_indices = [12, 14, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 16, 17, 18, 19]
