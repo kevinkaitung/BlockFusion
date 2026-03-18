@@ -75,8 +75,14 @@ if __name__ == "__main__":
         tfn_json = json5.load(f)
     resolution = tfn_json["dataSource"][0]["dimensions"]
     resolution = [resolution["x"], resolution["y"], resolution["z"]]
-    colorControls = tfn_json["view"]["volume"]["transferFunction"]["colorControls"]
-    opacityControl = tfn_json["view"]["volume"]["transferFunction"]["opacityControl"]
+    loaded_tfn = tfn_json["view"]["volume"]["transferFunction"]
+    colorControls = loaded_tfn["colorControls"]
+    if "opacityControl" in loaded_tfn:
+        opacityControl = loaded_tfn["opacityControl"]
+        gaussianObjects = None
+    elif "gaussianObjects" in loaded_tfn:
+        opacityControl = None
+        gaussianObjects = loaded_tfn["gaussianObjects"]
 
     # create sampler
     resolution = args.dims
@@ -208,7 +214,7 @@ if __name__ == "__main__":
         fibonacci_points = torch.tensor(fibonacci_points)
         fibonacci_points = fibonacci_points + cam.look_at
         
-        tfn_lut = build_transfer_function(colorControls, opacityControl, lut_size=1024)
+        tfn_lut = build_transfer_function(colorControls, opacityControl, gaussianObjects, lut_size=1024)
         
         pts_coords_values_group = []
         inside_mask_group = []

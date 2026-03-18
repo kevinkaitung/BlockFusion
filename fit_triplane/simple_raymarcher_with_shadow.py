@@ -55,27 +55,34 @@ class MarchConfig:
 # Transfer Function
 # ---------------------------------------------------------------------------
 # TODO: tfn function might not need gradient because we just treat it like constant value for lookup
-def build_transfer_function(color_controls: list, opacity_controls: list, lut_size: int = 1024):
+def build_transfer_function(color_controls: list, opacity_controls: list, gaussian_objects: list, lut_size: int = 1024):
     """
-    Pre-bakes the transfer function into a lookup table (LUT) of shape (lut_size, 4)
-    where each entry is (R, G, B, Alpha), ready for fast interpolation during marching.
+    Pre-bakes the transfer function into a lookup table (LUT) of shape (lut_size, 4).
+    Supports two opacity formats:
+      - opacity_controls: piecewise linear control points {'position': {'x', 'y'}}
+      - gaussian_objects: sum of gaussians {'mean', 'sigma', 'heightFactor'}
+    One of the two must be provided.
 
     Args:
         color_controls:   list of {'position': float, 'color': {'r', 'g', 'b'}}
         opacity_controls: list of {'position': {'x': float, 'y': float}}
+        gaussian_objects: list of {'mean': float, 'sigma': float, 'heightFactor': float}
         lut_size:         resolution of the baked LUT
     Returns:
         lut: (lut_size, 4) float tensor
     """
+    
+    assert opacity_controls is not None or gaussian_objects is not None, \
+        "Must provide either opacity_controls or gaussian_objects"
+    assert not (opacity_controls is not None and gaussian_objects is not None), \
+        "Provide only one of opacity_controls or gaussian_objects, not both"
+    
     with torch.no_grad():
         # -- sort control points by position --
         color_positions = torch.tensor([c['position']          for c in color_controls])
         color_values    = torch.tensor([[c['color']['r'],
                                         c['color']['g'],
                                         c['color']['b']]      for c in color_controls])  # (N, 3)
-
-        opacity_positions = torch.tensor([o['position']['x']   for o in opacity_controls])
-        opacity_values    = torch.tensor([o['position']['y']   for o in opacity_controls])  # (M,)
 
         # -- query positions: evenly spaced in [0, 1] --
         t = torch.linspace(0.0, 1.0, lut_size)   # (lut_size,)
@@ -108,9 +115,40 @@ def build_transfer_function(color_controls: list, opacity_controls: list, lut_si
                 out[q] = (1.0 - alpha) * ctrl_val[lo] + alpha * ctrl_val[hi]
 
             return out.squeeze(-1) if is_1d else out
+        
+        # -- gaussian opacity evaluator --
+        def gaussian_opacity(query, gaussians):
+            """
+            Sum of Gaussians evaluated at each query position.
+            f(x) = sum_i [ heightFactor_i * exp(-0.5 * ((x - mean_i) / sigma_i)^2) ]
 
+            query:     (Q,)
+            gaussians: list of {'mean', 'sigma', 'heightFactor'}
+            returns:   (Q,)  opacity values in [0, 1]
+            """
+            means   = torch.tensor([g['mean']         for g in gaussians])  # (G,)
+            sigmas  = torch.tensor([g['sigma']         for g in gaussians])  # (G,)
+            heights = torch.tensor([g['heightFactor']  for g in gaussians])  # (G,)
+
+            # query: (Q,) → (Q, 1),  means/sigmas/heights: (G,) → (1, G)
+            q   = query.unsqueeze(-1)                                   # (Q, 1)
+            exp = torch.exp(-0.5 * ((q - means) / sigmas.clamp(1e-8)) ** 2)  # (Q, G)
+            opacity = (heights * exp).sum(dim=-1)                       # (Q,)
+
+            # clamp to [0, 1] — sum of gaussians can exceed 1 if heights are large
+            return opacity.clamp(0.0, 1.0)
+
+        # -- build color LUT --
         lut_rgb   = piecewise_lerp(t, color_positions,   color_values)    # (lut_size, 3)
-        lut_alpha = piecewise_lerp(t, opacity_positions, opacity_values)  # (lut_size,)
+        
+        # -- build opacity LUT --
+        if opacity_controls is not None:
+            opacity_positions = torch.tensor([o['position']['x'] for o in opacity_controls])
+            opacity_values    = torch.tensor([o['position']['y'] for o in opacity_controls])
+            lut_alpha = piecewise_lerp(t, opacity_positions, opacity_values)  # (lut_size,)
+        else:
+            lut_alpha = gaussian_opacity(t, gaussian_objects)                 # (lut_size,)
+
         lut = torch.cat([lut_rgb, lut_alpha.unsqueeze(-1)], dim=-1)       # (lut_size, 4)
     return lut.detach()     # explicitly detach just to be safe
 
