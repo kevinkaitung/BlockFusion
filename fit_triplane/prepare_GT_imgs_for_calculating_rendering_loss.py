@@ -204,7 +204,7 @@ if __name__ == "__main__":
     cfg = MarchConfig(
         t_near    = 0.0001,
         t_far     = 2.0,
-        n_samples = 1024,
+        n_samples = view_angles_file["n_samples"] if "n_samples" in view_angles_file.keys() else 1024,
         # no use of patch
         patch_width=16,
         patch_height=16,
