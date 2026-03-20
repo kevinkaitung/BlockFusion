@@ -479,7 +479,9 @@ class RandomlyGenerateLightDir(torch.utils.data.Dataset):
             target = torch.empty([selected_coords.shape[0], 1], dtype=torch.float32, device="cuda")
             decode_shadow(self.sampler, selected_coords, target, self.light_dir_spherical_normalized[idx], self.tfn)
             selected_coord_groups.append(selected_coords.cpu())
-            selected_value_groups.append(target.cpu())
+            # HACK: flatten the target to align with the impl. in HyperDiffusion
+            # But should be more reasonable to preserve the dim of #fields (though always 1 in our case)
+            selected_value_groups.append(target.squeeze(1).cpu())
             print(f"instance {idx}: selecting {selected_coords.shape[0]} uniformly sampled points")
             
         return selected_coord_groups, selected_value_groups
