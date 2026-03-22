@@ -14,6 +14,18 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 from timevarying_data_helper import fibonacci_sphere, cartesian_to_spherical_coords, spherical_coords_radiance_to_normalized
 
+def map_to_tfn_range(normalized_value, raw_data_min, raw_data_max, tfn_scalar_mapping_range_min, tfn_scalar_mapping_range_max):
+    # Step 1: unnormalize back to raw data space
+    raw_value = normalized_value * (raw_data_max - raw_data_min) + raw_data_min
+
+    # Step 2: normalize into tfn range
+    tfn_range = tfn_scalar_mapping_range_max - tfn_scalar_mapping_range_min
+    tfn_normalized = (raw_value - tfn_scalar_mapping_range_min) / tfn_range
+
+    # Step 3: # zero out elements outside [0, 1]
+    tfn_normalized[(tfn_normalized < 0.0) | (tfn_normalized > 1.0)] = 0.0
+    return tfn_normalized
+
 def prepare_pre_calculated_sampled_points(camera, device, cfg, scene_aabb, sampler, sampler_device):
     assert device == sampler_device, "device that tensors operate on should be the same as sampler device"
     
@@ -83,6 +95,15 @@ if __name__ == "__main__":
     elif "gaussianObjects" in loaded_tfn:
         opacityControl = None
         gaussianObjects = loaded_tfn["gaussianObjects"]
+
+    # read value range of tfn
+    tfn_scalar_mapping_range_max = tfn_json["view"]["volume"]["scalarMappingRange"]["maximum"]
+    tfn_scalar_mapping_range_min = tfn_json["view"]["volume"]["scalarMappingRange"]["minimum"]
+
+    # read raw volume just to get original min/max value
+    raw_data = np.fromfile(args.raw_data_file_path, dtype=args.dtype)
+    raw_data_max = raw_data.max()
+    raw_data_min = raw_data.min()
 
     # create sampler
     resolution = args.dims
@@ -231,6 +252,10 @@ if __name__ == "__main__":
             cfg.t_far = t_near_far[1]
             
             pts_coords_values, inside_mask = prepare_pre_calculated_sampled_points(cam, "cuda", cfg, aabb, sampler, "cuda")
+            # HACK: because some dataset's tfn doesn't fully cover raw data's value range
+            # need additional process
+            pts_coords_values[..., 3] = map_to_tfn_range(pts_coords_values[..., 3], raw_data_min, raw_data_max, tfn_scalar_mapping_range_min, tfn_scalar_mapping_range_max)
+            
             # pts_coords_values_group.append(pts_coords_values.cpu())
             # inside_mask_group.append(inside_mask.cpu())
             pts_coords_values_group.append(pts_coords_values)
