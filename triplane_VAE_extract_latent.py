@@ -84,13 +84,13 @@ if __name__ == "__main__":
     if is_encode:
         dataset = LatentWeightDataset(
         triplane_weights,
-        cfg.vae_config["plane_shape"])
+        cfg.vae_config["plane_shape"], triplane_weights.min(), triplane_weights.max())
     else:
         # three times at last dimension for 3 triplanes
         z_shape = [cfg.vae_config["z_shape"][0], cfg.vae_config["z_shape"][1], cfg.vae_config["z_shape"][2] * 3]
         dataset = LatentWeightDataset(
         latent_weights,
-        z_shape)
+        z_shape, latent_weights.min(), latent_weights.max())
     
     train_dataloader = torch.utils.data.DataLoader(dataset,
         batch_size=1,

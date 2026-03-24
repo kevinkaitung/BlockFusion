@@ -182,10 +182,11 @@ if __name__ == "__main__":
     
     # TODO: think about where to put z_shape. with Unet arch def or with latent_triplanes.pt?
     # z_shape = loaded_model["z_shape"] # sample shape: [4, 32, 32]
-    z_shape = [4, 32, 32]
+    # HACK: for wider latent shape
+    z_shape = [16, 32, 32]
     dataset = LatentWeightDataset(
         latent_weights,
-        [z_shape[0], z_shape[1], z_shape[2] * 3])
+        [z_shape[0], z_shape[1], z_shape[2] * 3], latent_weights.min(), latent_weights.max())
     # shadow_meta_dataset = ShadowVolumesMetaDataset(
     #     raw_data_dir=path_to_dataset_directory,
     #     raw_data_filename_prefix="shadow",
