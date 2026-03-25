@@ -474,6 +474,7 @@ def ray_march_with_precalculated_pts(
         cfg:                MarchConfig,
         tfn_file:           str,
         light_dir_normalized: list = [0.25, 0.25],
+        net:                Any = None,
     ):
         device = ray_sampled_pts.device
         
@@ -486,7 +487,13 @@ def ray_march_with_precalculated_pts(
         density_flat = pts_flat[:, 3:]      # (n_rays*N, 1)
         pts_coords = pts_flat[:, :3].clone()
         shadow_flat  = torch.zeros([pts_flat.shape[0], 1], device=device)   # (n_rays*N, 1)
-        decode_shadow(sampler, pts_coords, shadow_flat, light_dir_normalized, tfn_file)
+        if net is None:
+            decode_shadow(sampler, pts_coords, shadow_flat, light_dir_normalized, tfn_file)
+        else:
+            with torch.no_grad():
+                C = 65536
+                for i in range(0, pts_coords.shape[0], C):
+                    shadow_flat[i:i+C] = net(pts_coords[i:i+C])
         
         # zero out any outside points that decode might have affected
         # density_flat[~inside_mask] = 0.0
