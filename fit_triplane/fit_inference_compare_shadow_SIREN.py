@@ -11,6 +11,7 @@ from fit import Triplane, Network
 from fit_shadow_randomly_generate import MLP_TCNN
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+from networks import NeurCompNet
 
 # Add parent directory to sys.path
 # TODO: make it more flexible to call timevarying_data_helper anywhere
@@ -58,7 +59,7 @@ def generate_random_coords_chunks(total_batch_size, chunk_size, device='cuda'):
         # allocate memory on CPU, only move to GPU when used for model inference
         yield coords[start:end].to(device)
 
-def inference(dataset, data_res, chunk_size, value_range, triplane, net, instances_to_store, filename_prefix, sampled_batch_size=10000000):
+def inference(dataset, data_res, chunk_size, value_range, nets, instances_to_store, filename_prefix, sampled_batch_size=5000000):
     psnr_list = []
     psnr_fast_list = []
     ssim_list = []
@@ -113,9 +114,10 @@ def inference(dataset, data_res, chunk_size, value_range, triplane, net, instanc
         for batch_idx in tqdm(range(len(dataset))):
             total_sq_error = 0.0
             total_count = 0
-            this_batch_triplane = triplane[batch_idx].cuda()
+            this_batch_net = nets[batch_idx].cuda()
             for coord_chunk in generate_random_coords_chunks(sampled_batch_size, chunk_size):
-                preds = net(this_batch_triplane(coord_chunk, 0))
+                with torch.no_grad():
+                    preds = this_batch_net(coord_chunk)
                 targets = dataset.decode_ith_shadow_volume(batch_idx, coord_chunk)[2]
                 # sum of squared errors for this chunk
                 sq_error = F.mse_loss(preds, targets, reduction="sum")
@@ -124,7 +126,7 @@ def inference(dataset, data_res, chunk_size, value_range, triplane, net, instanc
         
             loss = total_sq_error / total_count
             
-            this_batch_triplane = this_batch_triplane.cpu()
+            this_batch_net = this_batch_net.cpu()
             PSNR = (20 * np.log10(value_range / np.sqrt(loss)))
             psnr_fast_list.append(PSNR)
             print(f"idx:{batch_idx} PSNR eval only on sampled coords:{PSNR}")
@@ -138,9 +140,9 @@ if __name__ == "__main__":
     parser.add_argument('--configs', type=str, nargs='+', default='base_timevarying.json')
     parser.add_argument('--instances_to_store', type=int, nargs='+', default=[0])
     parser.add_argument('--result_plot_name', type=str, default="psnr_plot")
-    parser.add_argument('--triplane_file_paths', type=str, nargs='+', default="../VAE_Reconstructed_triplane.pt")
+    parser.add_argument('--SIREN_file_paths', type=str, nargs='+', default="")
     # pre-trained triplane model path: "ch_32_saved_model.ckpt"
-    parser.add_argument('--triplane_recon_types', type=str, nargs='+', default='vae_recon')
+    parser.add_argument('--SIREN_recon_types', type=str, nargs='+', default='SIREN_diffusion')
     
     parser.add_argument('--dims', type=int, nargs=3, default=[256, 256, 256])
     parser.add_argument('--dtype', type=str, default='float32')
@@ -184,9 +186,9 @@ if __name__ == "__main__":
     psnr_lists = []
     psnr_fast_lists = []
     light_dir_lists = []
-    for config_file_path, triplane_file_path, recon_type in zip(args.configs, args.triplane_file_paths, args.triplane_recon_types):
+    for config_file_path, SIREN_file_path, recon_type in zip(args.configs, args.SIREN_file_paths, args.SIREN_recon_types):
         
-        loaded_model = torch.load(triplane_file_path, map_location="cpu")
+        loaded_model = torch.load(SIREN_file_path, map_location="cpu")
         
         n_instances = len(loaded_model['light_dir_cartesian'])
         
@@ -207,31 +209,15 @@ if __name__ == "__main__":
         )
         value_range = dataset.value_range
         
-        # net = Network(
-        #     d_in=config.channel,
-        #     d_hid=config.n_hid,
-        #     n_layers=config.n_layers,
-        #     d_out=config.n_labels,
-        #     init_type="geo_init",
-        # ).cuda()
+        nets = [
+            NeurCompNet(n_input_dims=3, n_output_dims=config.n_labels, bias=False, n_hidden_layers=config.n_layers, n_neurons=config.n_hid, is_residual=True)
+            for _ in range(n_instances)]
+        nets = nn.ModuleList(nets)
+
+        nets.load_state_dict(loaded_model['net_state_dict'])
         
-        net = MLP_TCNN(n_input_dims=config.channel, n_output_dims=config.n_labels,
-                    n_hidden_layers=config.n_layers, n_neurons=config.n_hid,
-                    activation="ReLU", output_activation="None")
-
-        # instantiate multiple triplanes (each instance has its own triplane)
-        triplane = [Triplane(
-            reso=config.resolution,
-            channel=config.channel,
-            init_type="geo_init",
-            objname=None,
-        ) for _ in range(n_instances)]
-        triplane = nn.ModuleList(triplane)
-
-        net.load_state_dict(loaded_model['net_state_dict'])
-        triplane.load_state_dict(loaded_model['triplane_state_dict'])
         # psnr_list, psnr_fast_list = inference(dataset, data_res, chunk_size, value_range, triplane, net, args.instances_to_store, recon_type)
-        psnr_list = inference(dataset, data_res, chunk_size, value_range, triplane, net, args.instances_to_store, recon_type)
+        psnr_list = inference(dataset, data_res, chunk_size, value_range, nets, args.instances_to_store, recon_type)
         psnr_lists.append(psnr_list)
         light_dir_lists.append(loaded_model['light_dir_cartesian'])
         # psnr_fast_lists.append(psnr_fast_list)
@@ -243,17 +229,17 @@ if __name__ == "__main__":
         print(f"instance {idx} - ", end="")
         for j in range(len(psnr_lists)):
             if idx < len(psnr_lists[j]):  # check if this list has enough elements
-                print(f"{args.triplane_recon_types[j]} PSNR: {psnr_lists[j][idx]}, ", end="")
+                print(f"{args.SIREN_recon_types[j]} PSNR: {psnr_lists[j][idx]}, ", end="")
             else:
-                print(f"{args.triplane_recon_types[j]} PSNR: N / A, ", end="")
+                print(f"{args.SIREN_recon_types[j]} PSNR: N / A, ", end="")
         print("")
         # print(psnr_list[i], ssim_list[i])
     
     # After the PSNR printing loop, add:
     plt.figure(figsize=(10, 6))
     for idx in range(len(psnr_lists)):
-        plt.plot(range(len(psnr_lists[idx])), psnr_lists[idx], label=f'{args.triplane_recon_types[idx]} PSNR (avg: {np.mean(np.stack(psnr_lists[idx])):0,.4f})')
-        print(f'{args.triplane_recon_types[idx]} PSNR (avg: {np.mean(np.stack(psnr_lists[idx])):0,.4f})')
+        plt.plot(range(len(psnr_lists[idx])), psnr_lists[idx], label=f'{args.SIREN_recon_types[idx]} PSNR (avg: {np.mean(np.stack(psnr_lists[idx])):0,.4f})')
+        print(f'{args.SIREN_recon_types[idx]} PSNR (avg: {np.mean(np.stack(psnr_lists[idx])):0,.4f})')
         # plt.plot(range(len(psnr_fast_lists[idx])), psnr_fast_lists[idx], label=f'{args.triplane_recon_types[idx]} fast PSNR (avg: {np.mean(np.stack(psnr_fast_lists[idx])):0,.4f})')
     plt.xlabel('Instance')
     plt.ylabel('PSNR (dB)')
@@ -265,9 +251,9 @@ if __name__ == "__main__":
     
     info_json = dict()
     for idx in range(len(psnr_lists)):
-        info_json[f'{args.triplane_recon_types[idx]}'] = dict()
-        info_json[f'{args.triplane_recon_types[idx]}']['light_dir_cartesian'] = light_dir_lists[idx]
-        info_json[f'{args.triplane_recon_types[idx]}']['PSNR_recon_quality'] = psnr_lists[idx]
+        info_json[f'{args.SIREN_recon_types[idx]}'] = dict()
+        info_json[f'{args.SIREN_recon_types[idx]}']['light_dir_cartesian'] = light_dir_lists[idx]
+        info_json[f'{args.SIREN_recon_types[idx]}']['PSNR_recon_quality'] = psnr_lists[idx]
     with open(f"{args.result_plot_name}.json", "w") as f:
         json.dump(info_json, f, indent=4)
     
