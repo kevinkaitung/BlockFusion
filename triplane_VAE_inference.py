@@ -42,25 +42,63 @@ if __name__ == "__main__":
     # pretrained_vae_model = torch.load("logs/triplane_AE_model_a/20250619-000758/vae_model_epoch_1399.ckpt")
     vae_model.load_state_dict(torch.load(os.path.join(args.expdir, args.model_file_name), weights_only=False)["model_state_dict"])
     
-    # load pretrained tri-plane here
+    # # load pretrained tri-plane here
+    # pretrained_triplane_model = torch.load(args.pretrained_triplane_file_path, map_location="cpu")
+    # keys = pretrained_triplane_model['triplane_state_dict'].keys()
+    # n_instances = sum(1 for k in keys if k.endswith("triplane"))
+    # triplane_weights = [pretrained_triplane_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_instances)]
+    # triplane_weights = torch.cat(triplane_weights, dim=0)
+    
+    # # load original triplane just to get the max and min values used in normalization
+    # original_triplane_model = torch.load(args.original_triplane_file_path, map_location="cpu")
+    # keys = original_triplane_model['triplane_state_dict'].keys()
+    # original_n_instances = sum(1 for k in keys if k.endswith("triplane"))
+    # original_triplanes = [original_triplane_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(original_n_instances)]
+    # original_triplanes = torch.cat(original_triplanes, dim=0)
+    # # normalization for training all volumes
+    # original_min = original_triplanes.min()
+    # original_max = original_triplanes.max()
+    
+    # triplane_weights = (triplane_weights - original_min) / (original_max - original_min)
+    # triplane_weights = triplane_weights * 2 - 1
+    import gc
+
+    # ── 1. Load only the triplane sub-dict, drop the rest immediately ──
     pretrained_triplane_model = torch.load(args.pretrained_triplane_file_path, map_location="cpu")
-    keys = pretrained_triplane_model['triplane_state_dict'].keys()
-    n_instances = sum(1 for k in keys if k.endswith("triplane"))
-    triplane_weights = [pretrained_triplane_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(n_instances)]
-    triplane_weights = torch.cat(triplane_weights, dim=0)
+    pretrained_state = pretrained_triplane_model['triplane_state_dict']
+    # del pretrained_ckpt
+    # gc.collect()
+
+    n_instances = sum(1 for k in pretrained_state.keys() if k.endswith("triplane"))
+
+    # ── 2. Cat in-place and delete each shard as you go ──
+    triplane_weights = torch.cat(
+        [pretrained_state.pop(f"{idx}.triplane") for idx in range(n_instances)], dim=0
+    )
+    del pretrained_state
+    gc.collect()
+    print(f"[after loading pretrained]")
+
+    # ── 3. Same pattern for original, but only keep min/max ──
+    original_ckpt = torch.load(args.original_triplane_file_path, map_location="cpu")
+    original_state = original_ckpt['triplane_state_dict']
+    del original_ckpt
+    gc.collect()
+
+    original_n_instances = sum(1 for k in original_state.keys() if k.endswith("triplane"))
+
+    # Compute min/max without ever materializing the full cat'd tensor
+    original_min = torch.stack([original_state[f"{idx}.triplane"].min() for idx in range(original_n_instances)]).min()
+    original_max = torch.stack([original_state[f"{idx}.triplane"].max() for idx in range(original_n_instances)]).max()
+    del original_state
+    gc.collect()
+    print(f"[after loading original]")
+
+    # ── 4. Normalize in-place to avoid creating a second copy ──
+    triplane_weights.sub_(original_min).div_(original_max - original_min)
+    triplane_weights.mul_(2).sub_(1)
+    print(f"[after normalization]")
     
-    # load original triplane just to get the max and min values used in normalization
-    original_triplane_model = torch.load(args.original_triplane_file_path, map_location="cpu")
-    keys = original_triplane_model['triplane_state_dict'].keys()
-    original_n_instances = sum(1 for k in keys if k.endswith("triplane"))
-    original_triplanes = [original_triplane_model['triplane_state_dict'][f"{idx}.triplane"] for idx in range(original_n_instances)]
-    original_triplanes = torch.cat(original_triplanes, dim=0)
-    # normalization for training all volumes
-    original_min = original_triplanes.min()
-    original_max = original_triplanes.max()
-    
-    triplane_weights = (triplane_weights - original_min) / (original_max - original_min)
-    triplane_weights = triplane_weights * 2 - 1
     min = -1
     max = 1
     

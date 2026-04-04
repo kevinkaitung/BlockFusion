@@ -35,6 +35,25 @@ def plot_single_channel(data, title="Single Channel Plot", cmap='viridis', save_
     else:
         plt.show()
 
+def plot_single_channel_of_two_ins_side_by_side(data1, data2, cmap='viridis', save_path=None):
+    fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+
+    im = axes[0].imshow(data1, cmap=cmap)
+    axes[1].imshow(data2, cmap=cmap)
+
+    for ax in axes:
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    fig.colorbar(im, ax=axes)
+    
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path)
+        plt.close()
+    else:
+        plt.show()
+
 if __name__ == "__main__":
 
     vae_recon_model = torch.load("../VAE_Reconstructed_triplane_ch_32.pt")

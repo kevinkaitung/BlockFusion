@@ -111,7 +111,7 @@ if __name__ == "__main__":
     vae_model.eval()
     with torch.no_grad():
         for batch_idx, raw_data in enumerate(train_dataloader):
-            
+            print(f"Processing batch {batch_idx}...")
             if is_encode:
                 raw_data[0] = raw_data[0].cuda()
                 mu, log_var = vae_model.module.encode(raw_data[0])
@@ -121,7 +121,7 @@ if __name__ == "__main__":
                 # TODO: check the data shape of raw_data when decoding
                 output = vae_model.module.decode(raw_data[0])
                 output = ((output - min) / (max - min)) * (original_max - original_min) + original_min
-            outputs.append(output)
+            outputs.append(output.cpu())
         outputs = torch.cat(outputs, dim=0)
         print("outputs shape: {}".format(outputs.shape))
     
