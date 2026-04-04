@@ -323,7 +323,8 @@ if __name__ == "__main__":
     }
     
     with open(os.path.join(save_dir, f"{SIREN_file_path_stem}_img_eval_metrics.json"), "w") as f:
-        json5.dump(data_to_store, f)
+        import json
+        json.dump(data_to_store, f, indent=4)
     
     print(f"max memory allocated: {torch.cuda.max_memory_allocated()/1024**3:.2f} GB")
     print(f"max memory reserved: {torch.cuda.max_memory_reserved()/1024**3:.2f} GB")
