@@ -55,6 +55,8 @@ if __name__ == "__main__":
     
     # plane_shape = [3, 32, 128, 128]
     plane_shape = [3, 4, 32, 32]
+    # if using wider latent space:
+    # plane_shape = [3, 16, 32, 32]
 
     # # Load model and put it in eval mode
     # model = Conv3DAwareUNet(
