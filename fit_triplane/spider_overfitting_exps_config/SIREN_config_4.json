@@ -1,0 +1,14 @@
+{
+    "max_iters": 2000,
+    "lr_net": 1e-3,
+    "lr_tri": 1e-3,
+    "batch_size": 50,
+    "subset_reload_iters": 2000,
+
+    "n_layers": 4,
+    "n_hid": 128,
+    
+    "sample_batch_size": 65536,
+
+    "n_labels": 1
+}
