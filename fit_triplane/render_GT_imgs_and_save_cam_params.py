@@ -68,6 +68,98 @@ def prepare_pre_calculated_sampled_points(camera, device, cfg, scene_aabb, sampl
     
     return pts_coords_values, inside_mask
 
+def compute_intrinsics(fov_y_deg, image_width, image_height):
+    """
+    fov_y_deg: vertical field of view in degrees
+    Returns normalized K matrix [3,3]
+    """
+    fov_y_rad = np.deg2rad(fov_y_deg)
+    
+    # Focal lengths in pixels
+    fy_px = (image_height / 2.0) / np.tan(fov_y_rad / 2.0)
+    fx_px = fy_px  # assumes square pixels; use fov_x if non-square
+    
+    # Principal point (assume centered)
+    cx_px = image_width  / 2.0
+    cy_px = image_height / 2.0
+    
+    # Normalize by image dimensions
+    fx = fx_px / image_width
+    fy = fy_px / image_height
+    cx = cx_px / image_width
+    cy = cy_px / image_height
+    
+    K = np.array([
+        [fx,  0, cx],
+        [ 0, fy, cy],
+        [ 0,  0,  1]
+    ], dtype=np.float32)
+    return K
+
+def compute_extrinsics(position, lookat, up):
+    """
+    position: camera position in world space, shape [3]
+    lookat:   point the camera is looking at, shape [3]
+    up:       up vector (e.g. [0,1,0]), shape [3]
+    
+    Returns C2W extrinsics [4,4] in OpenCV convention
+    (what the dataset expects after w2c.inverse())
+    """
+    position = np.array(position, dtype=np.float64)
+    lookat   = np.array(lookat,   dtype=np.float64)
+    up       = np.array(up,       dtype=np.float64)
+
+    # --- Build OpenGL-style C2W ---
+    # Camera looks down -Z in OpenGL
+    forward = lookat - position
+    forward /= np.linalg.norm(forward)          # +Z points AWAY from lookat in OpenGL
+    
+    right = np.cross(forward, up)
+    right /= np.linalg.norm(right)              # +X points right
+    
+    true_up = np.cross(right, forward)
+    true_up /= np.linalg.norm(true_up)          # +Y points up
+
+    # C2W in OpenGL convention
+    # Columns are: [right, true_up, -forward, position]
+    c2w_opengl = np.eye(4, dtype=np.float64)
+    c2w_opengl[:3, 0] =  right        # X axis
+    c2w_opengl[:3, 1] =  true_up      # Y axis
+    c2w_opengl[:3, 2] = -forward      # Z axis (OpenGL looks down -Z)
+    c2w_opengl[:3, 3] =  position     # translation
+
+    # --- Convert OpenGL -> OpenCV convention ---
+    # OpenCV: X right, Y down, Z forward
+    # OpenGL: X right, Y up,   Z backward
+    # Flip Y and Z axes
+    flip_yz = np.diag([1, -1, -1, 1]).astype(np.float64)
+    c2w_opencv = c2w_opengl @ flip_yz
+
+    return c2w_opencv.astype(np.float32)
+
+
+def c2w_to_w2c(c2w):
+    """ Invert C2W to get W2C (what's stored in the .torch file) """
+    return np.linalg.inv(c2w)
+
+def build_poses_tensor(c2w, fx, fy, cx, cy):
+    """
+    c2w: [4,4] C2W OpenCV matrix
+    fx, fy, cx, cy: normalized intrinsics
+    Returns poses [18] matching the dataset's format
+    """
+    w2c = c2w_to_w2c(c2w)                  # dataset stores W2C
+    r_t = w2c[:3, :]                        # 3x4 -> flattened to 12 values
+
+    poses = np.zeros(18, dtype=np.float32)
+    poses[0] = fx
+    poses[1] = fy
+    poses[2] = cx
+    poses[3] = cy
+    # poses[4:6] unused / padding
+    poses[6:18] = r_t.flatten()             # row-major 3x4 W2C
+    return poses
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
@@ -77,7 +169,7 @@ if __name__ == "__main__":
     parser.add_argument('--tfn_file_path', type=str, default="/home/kctung/Projects/instant-vnr-pytorch/bindings/ovr/data/configs/vorts_shadow.json")
     parser.add_argument('--pretrained_SIREN_file_path', type=str)
     parser.add_argument('--image_resolution', type=int, nargs=2, default=[128, 128])
-    parser.add_argument('--rendered_imgs_view_angles_file_path', type=str)
+    parser.add_argument('--rendered_imgs_view_angles_file_path', type=str, default=None)
     
     args = parser.parse_args()
     
@@ -112,6 +204,10 @@ if __name__ == "__main__":
     # read pretrained SIREN model and gather all instances' light directions
     pretrained_SIREN = torch.load(args.pretrained_SIREN_file_path, map_location="cpu")
     n_instances = len(pretrained_SIREN['light_dir_cartesian'])
+    # NOTE: try only one instance for now
+    ins_idx_start = 0
+    ins_idx_end = 1
+    n_instances = 1
     pretrained_SIREN_light_dirs = spherical_coords_radiance_to_normalized(cartesian_to_spherical_coords(np.array(pretrained_SIREN['light_dir_cartesian'])))
     
     # prepare saving directory
@@ -120,9 +216,6 @@ if __name__ == "__main__":
     pretrained_SIREN_file_path_stem = path.stem
     
     
-    # generate camera positions from fibonacci sphere (which is numpy array)
-    # fibonacci_points = fibonacci_sphere(32)
-    # fibonacci_points = fibonacci_points.astype(np.float32)
     # pre-select some of the points (more front-facing points)
     # for spider dataset
     # fibonacci_points = [
@@ -181,14 +274,42 @@ if __name__ == "__main__":
     #     [-0.06444251,  0.625,      -0.77796024],
     #     # [ 0.35537347,  0.875,       0.32876238],
     # ]
-    with open(args.rendered_imgs_view_angles_file_path, 'r') as f:
-        view_angles_file = json5.load(f)
-    fibonacci_points = view_angles_file["fibonacci_points"]
-    if "ts_near_far" in view_angles_file.keys():
-        ts_near_far = view_angles_file["ts_near_far"]
+    # params for spider
+    up_vector = [0.0, 0.0, -1.0]
+    camera_look_at = [0.5, 0.5,  0.5]
+    # for spider dataset (for FFGS)
+    # for dense interpolated camera poses
+    offset_points = torch.tensor([0.0, 0.0, 0.0])
+    fibonacci_points_start_end = [
+        [0.5, -0.4, 0.3],
+        [0.6, -0.6, 0.45],
+    ]
+    fibonacci_points_start_end = torch.tensor(fibonacci_points_start_end)
+    # interpolate cameras between two points
+    n_views = 24
+    fibonacci_points = []
+    for t in torch.linspace(0, 1, n_views).tolist():
+        fibonacci_points.append(((1-t) * fibonacci_points_start_end[0] + t * fibonacci_points_start_end[1]).tolist())
+    # add a very different view as test set
+    fibonacci_points.append(torch.tensor([-0.1313, -0.2266, 0.2342]))
+    # for small overlap view
+    # generate camera positions from fibonacci sphere (which is numpy array)
+    # fibonacci_points = fibonacci_sphere(70)
+    # fibonacci_points = fibonacci_points.astype(np.float32)
+    # offset_points = torch.tensor(camera_look_at)
+    
+    if args.rendered_imgs_view_angles_file_path is not None:
+        with open(args.rendered_imgs_view_angles_file_path, 'r') as f:
+            view_angles_file = json5.load(f)
+        fibonacci_points = view_angles_file["fibonacci_points"]
+        offset_points = torch.tensor(camera_look_at)
+        ts_near_far = view_angles_file.get(
+            "ts_near_far",
+            [[0.3, 1.3] for _ in range(len(fibonacci_points))]
+        )
     else:
         ts_near_far = [
-            [0.3, 1.5] for _ in range(len(fibonacci_points))
+            [0.3, 1.3] for _ in range(len(fibonacci_points))
         ]
     # # permute indices from spider for mechhand
     # old selection (leave here just for record)
@@ -215,8 +336,8 @@ if __name__ == "__main__":
     cam = Camera(
         # for spider
         position = torch.tensor([-0.085, -0.31, -0.012]),
-        look_at  = torch.tensor([0.5, 0.5,  0.5]),
-        up       = torch.tensor([0.0, 1.0,  0.0]),
+        look_at  = torch.tensor(camera_look_at),
+        up       = torch.tensor(up_vector),
         fov_y    = 60.0,
         width    = args.image_resolution[0],
         height   = args.image_resolution[1],
@@ -236,41 +357,56 @@ if __name__ == "__main__":
         # need to translate by the center point (look at)
         # because fibonacci sphere was generated based on the origin as sphere center
         fibonacci_points = torch.tensor(fibonacci_points)
-        fibonacci_points = fibonacci_points + cam.look_at
+        # NOTE: if the points are self-defined (not from fibonacci sphere), we don't need to translate it (offset_points = 0)
+        fibonacci_points = fibonacci_points + offset_points
         
         tfn_lut = build_transfer_function(colorControls, opacityControl, gaussianObjects, lut_size=1024)
         
-        pts_coords_values_group = []
-        inside_mask_group = []
-        # iterate through all camera position
-        for batch_idx, (cam_position, t_near_far) in enumerate(zip(fibonacci_points, ts_near_far)):
-            print(f"Processing batch idx: {batch_idx} / camera position: {cam_position} / t_near_far: {t_near_far}")
+        # pts_coords_values_group = []
+        # inside_mask_group = []
+        # # iterate through all camera position
+        # for batch_idx, (cam_position, t_near_far) in enumerate(zip(fibonacci_points, ts_near_far)):
+        #     print(f"Processing batch idx: {batch_idx} / camera position: {cam_position} / t_near_far: {t_near_far}")
             
-            # set to corresponding camera and config
-            cam.position = cam_position
-            cfg.t_near = t_near_far[0]
-            cfg.t_far = t_near_far[1]
+        #     # set to corresponding camera and config
+        #     cam.position = cam_position
+        #     cfg.t_near = t_near_far[0]
+        #     cfg.t_far = t_near_far[1]
             
-            pts_coords_values, inside_mask = prepare_pre_calculated_sampled_points(cam, "cuda", cfg, aabb, sampler, "cuda")
-            # HACK: because some dataset's tfn doesn't fully cover raw data's value range
-            # need additional process
-            pts_coords_values[..., 3] = map_to_tfn_range(pts_coords_values[..., 3], raw_data_min, raw_data_max, tfn_scalar_mapping_range_min, tfn_scalar_mapping_range_max)
+        #     pts_coords_values, inside_mask = prepare_pre_calculated_sampled_points(cam, "cuda", cfg, aabb, sampler, "cuda")
+        #     # HACK: because some dataset's tfn doesn't fully cover raw data's value range
+        #     # need additional process
+        #     pts_coords_values[..., 3] = map_to_tfn_range(pts_coords_values[..., 3], raw_data_min, raw_data_max, tfn_scalar_mapping_range_min, tfn_scalar_mapping_range_max)
             
-            # pts_coords_values_group.append(pts_coords_values.cpu())
-            # inside_mask_group.append(inside_mask.cpu())
-            pts_coords_values_group.append(pts_coords_values)
-            inside_mask_group.append(inside_mask)
+        #     # pts_coords_values_group.append(pts_coords_values.cpu())
+        #     # inside_mask_group.append(inside_mask.cpu())
+        #     pts_coords_values_group.append(pts_coords_values)
+        #     inside_mask_group.append(inside_mask)
         
         pre_cal_GT_images = []
         # iterate through all instances
-        for instance_idx in tqdm(range(n_instances)):
+        # for instance_idx in tqdm(range(n_instances)):
+        for instance_idx in tqdm(range(ins_idx_start, ins_idx_end)):
             print(f"Processing instance idx: {instance_idx}")
             
             light_dir_normalized = pretrained_SIREN_light_dirs[instance_idx].tolist()
             GT_images_this_instance = []
             
-            # iterate through all camera position
-            for batch_idx, (pts_coords_values, inside_mask) in enumerate(zip(pts_coords_values_group, inside_mask_group)):
+            # # iterate through all camera position
+            # for batch_idx, (pts_coords_values, inside_mask) in enumerate(zip(pts_coords_values_group, inside_mask_group)):
+            for batch_idx, (cam_position, t_near_far) in enumerate(zip(fibonacci_points, ts_near_far)):
+                print(f"Processing batch idx: {batch_idx} / camera position: {cam_position} / t_near_far: {t_near_far}")
+                
+                # set to corresponding camera and config
+                cam.position = cam_position
+                cfg.t_near = t_near_far[0]
+                cfg.t_far = t_near_far[1]
+                
+                pts_coords_values, inside_mask = prepare_pre_calculated_sampled_points(cam, "cuda", cfg, aabb, sampler, "cuda")
+                # HACK: because some dataset's tfn doesn't fully cover raw data's value range
+                # need additional process
+                pts_coords_values[..., 3] = map_to_tfn_range(pts_coords_values[..., 3], raw_data_min, raw_data_max, tfn_scalar_mapping_range_min, tfn_scalar_mapping_range_max)
+            
                 
                 # reshape to align with the input shape expected in ray_march_with_precalculated_pts
                 result = ray_march_with_precalculated_pts(pts_coords_values.reshape(-1, cfg.n_samples, 4), 
@@ -293,41 +429,88 @@ if __name__ == "__main__":
             pre_cal_GT_images.append(torch.stack(GT_images_this_instance))
     
     # save pre-calculated GT images
-    pretrained_SIREN["pre_cal_GT_images"] = pre_cal_GT_images
+    # pretrained_SIREN["pre_cal_GT_images"] = pre_cal_GT_images
     
     # save all camera and marching configs
     # TODO: integrate with the above code
-    camera_configs = []
-    aabb_configs = []
-    march_configs = []
+    # camera_configs = []
+    # aabb_configs = []
+    # march_configs = []
+    poses_tensors = []
     for batch_idx, (cam_position, t_near_far) in enumerate(zip(fibonacci_points, ts_near_far)):
-        camera_configs.append(asdict(Camera(
-            position = cam_position,
-            look_at  = cam.look_at,
-            up       = cam.up,
-            fov_y    = cam.fov_y,
-            width    = cam.width,
-            height   = cam.height,
-        )))
-        aabb_configs.append(torch.tensor([[0., 0., 0.], [1., 1., 1.]]))
-        march_configs.append(asdict(MarchConfig(
-            t_near    = t_near_far[0],
-            t_far     = t_near_far[1],
-            n_samples = cfg.n_samples,
-            # no use of patch
-            patch_width=cfg.patch_width,
-            patch_height=cfg.patch_height,
-        )))
     
-    pretrained_SIREN["camera_configs"] = camera_configs
-    pretrained_SIREN["aabb_configs"] = aabb_configs
-    pretrained_SIREN["march_configs"] = march_configs
-    # move those tensors back to cpu for consistency as GT images
-    pretrained_SIREN["pts_coords_values_group"] = [pts_coords_values.cpu() for pts_coords_values in pts_coords_values_group]
-    pretrained_SIREN["inside_mask_group"] = [inside_mask.cpu() for inside_mask in inside_mask_group]
-    
-    torch.save(pretrained_SIREN, os.path.join(save_dir, f"{pretrained_SIREN_file_path_stem}_w_GT_{args.image_resolution[0]}x{args.image_resolution[1]}_imgs.pt"))
-    
-    print(f"max memory allocated: {torch.cuda.max_memory_allocated()/1024**3:.2f} GB")
-    print(f"max memory reserved: {torch.cuda.max_memory_reserved()/1024**3:.2f} GB")
+        # compute intrinsics and extrinsics paramters for each view
+        K = compute_intrinsics(fov_y_deg=cam.fov_y, image_width=cam.width, image_height=cam.height)
+        c2w = compute_extrinsics(
+            position = cam_position,    # camera 3 units back
+            lookat   = cam.look_at,    # looking at origin
+            up       = cam.up,    # Y is up
+        )
+        poses = build_poses_tensor(
+            c2w,
+            fx=K[0,0], fy=K[1,1],
+            cx=K[0,2], cy=K[1,2],
+        )
+        poses_tensors.append(torch.tensor(poses))
+        # camera_configs.append(asdict(Camera(
+        #     position = cam_position,
+        #     look_at  = cam.look_at,
+        #     up       = cam.up,
+        #     fov_y    = cam.fov_y,
+        #     width    = cam.width,
+        #     height   = cam.height,
+        # )))
+        # aabb_configs.append(torch.tensor([[0., 0., 0.], [1., 1., 1.]]))
+        # march_configs.append(asdict(MarchConfig(
+        #     t_near    = t_near_far[0],
+        #     t_far     = t_near_far[1],
+        #     n_samples = cfg.n_samples,
+        #     # no use of patch
+        #     patch_width=cfg.patch_width,
+        #     patch_height=cfg.patch_height,
+        # )))
+    poses_tensors = torch.stack(poses_tensors)
         
+    # pretrained_SIREN["camera_configs"] = camera_configs
+    # pretrained_SIREN["aabb_configs"] = aabb_configs
+    # pretrained_SIREN["march_configs"] = march_configs
+    # # move those tensors back to cpu for consistency as GT images
+    # pretrained_SIREN["pts_coords_values_group"] = [pts_coords_values.cpu() for pts_coords_values in pts_coords_values_group]
+    # pretrained_SIREN["inside_mask_group"] = [inside_mask.cpu() for inside_mask in inside_mask_group]
+    
+    # torch.save(pretrained_SIREN, os.path.join(save_dir, f"{pretrained_SIREN_file_path_stem}_w_GT_{args.image_resolution[0]}x{args.image_resolution[1]}_imgs.pt"))
+    
+    # print(f"max memory allocated: {torch.cuda.max_memory_allocated()/1024**3:.2f} GB")
+    # print(f"max memory reserved: {torch.cuda.max_memory_reserved()/1024**3:.2f} GB")
+    
+    from PIL import Image
+    from io import BytesIO
+    
+    scenes = []
+    scene_id = 0
+    # NOTE: test on the first group of images first
+    for GT_images_this_instance in pre_cal_GT_images:
+        jpeg_tensors_this_instance = []
+        for batch_idx, GT_image in enumerate(GT_images_this_instance):
+            
+            # 1. Convert to uint8
+            result_uint8 = (GT_image.clamp(0, 1) * 255).byte().cpu().numpy()  # if tensor
+            
+            # 2. Encode to JPEG bytes
+            pil_img = Image.fromarray(result_uint8, mode="RGB")
+            buffer = BytesIO()
+            pil_img.save(buffer, format="JPEG", quality=95)
+            jpeg_bytes = buffer.getvalue()
+            
+            # 3. Convert to uint8 tensor (what the dataset expects)
+            jpeg_tensor = torch.frombuffer(jpeg_bytes, dtype=torch.uint8)
+            jpeg_tensors_this_instance.append(jpeg_tensor)
+        
+        scenes.append({
+            "key": str(scene_id),
+            "cameras": poses_tensors,  # shape [N, 18]: fx,fy,cx,cy, ..., 3x4 w2c
+            "images": jpeg_tensors_this_instance  # list of raw JPEG bytes as uint8 tensors
+        })
+        scene_id += 1
+    
+    torch.save(scenes, os.path.join(save_dir, "chunk_000.torch"))
