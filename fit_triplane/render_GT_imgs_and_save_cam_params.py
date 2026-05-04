@@ -160,6 +160,72 @@ def build_poses_tensor(c2w, fx, fy, cx, cy):
     poses[6:18] = r_t.flatten()             # row-major 3x4 W2C
     return poses
 
+# various ways to generate camera positions for evaluation
+def perturb_camera(base_position, base_lookat, base_up,
+                   pos_std=0.02, angle_std=1.0, n_views=2):
+    """
+    Small perturbations around a base camera.
+    pos_std: in your world units (0~1 scene)
+    angle_std: in degrees
+    """
+    cameras = []
+    for _ in range(n_views):
+        # Perturb position slightly
+        pos_noise = torch.randn(3) * pos_std
+        new_position = base_position + pos_noise
+
+        # Perturb lookat slightly
+        lookat_noise = torch.randn(3) * pos_std
+        new_lookat = base_lookat + lookat_noise
+
+        cameras.append({
+            "position": new_position,
+            "look_at":   new_lookat,
+            "up":       base_up,
+        })
+    return cameras
+
+def orbit_cameras(base_position, base_lookat, base_up, elevation_deg, 
+                  angle_start, angle_end, n_views=2):
+    """
+    Cameras on a circular arc, all looking at center.
+    Mimics RE10K's video trajectory style.
+    """
+    angles = torch.linspace(angle_start, angle_end, n_views)
+    elev   = torch.deg2rad(torch.tensor(elevation_deg))
+    radius = torch.linalg.norm(base_lookat - base_position)
+
+    cameras = []
+
+    for angle in angles:
+        az = torch.deg2rad(angle)
+        position = base_lookat + radius * torch.tensor([
+            torch.cos(elev) * torch.cos(az),
+            torch.sin(elev),
+            torch.cos(elev) * torch.sin(az),
+        ])
+        cameras.append({
+            "position": position,
+            "look_at":   base_lookat,
+            "up":       base_up,
+        })
+    return cameras
+
+def interpolate_cameras(base_position_a, base_position_b, base_lookat,
+                        base_up, n_views=2):
+    """
+    Linearly interpolate position between two provided cameras (share lookat point).
+    Used to generate in-between views.
+    """
+    cameras = []
+    for t in torch.linspace(0, 1, n_views):
+        cameras.append({
+            "position": (1-t) * base_position_a + t * base_position_b,
+            "look_at":   base_lookat,
+            "up":       base_up,
+        })
+    return cameras
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
@@ -264,11 +330,10 @@ if __name__ == "__main__":
     #     # [ 0.35537347,  0.875,       0.32876238],
     # ]
     # params for spider
-    up_vector = [0.0, 0.0, -1.0]
+    camera_up_vector = [0.0, 0.0, -1.0]
     camera_look_at = [0.5, 0.5,  0.5]
     # for spider dataset (for FFGS)
     # for dense interpolated camera poses
-    offset_points = torch.tensor([0.0, 0.0, 0.0])
     fibonacci_points_start_end = [
         [0.5, -0.4, 0.3],
         [0.6, -0.6, 0.45],
@@ -285,49 +350,67 @@ if __name__ == "__main__":
     # generate camera positions from fibonacci sphere (which is numpy array)
     # fibonacci_points = fibonacci_sphere(70)
     # fibonacci_points = fibonacci_points.astype(np.float32)
-    # offset_points = torch.tensor(camera_look_at)
+    # fibonacci_points = fibonacci_points + torch.tensor(camera_look_at)
     
     if args.rendered_imgs_view_angles_file_path is not None:
         with open(args.rendered_imgs_view_angles_file_path, 'r') as f:
             view_angles_file = json5.load(f)
         fibonacci_points = view_angles_file["fibonacci_points"]
-        offset_points = torch.tensor(camera_look_at)
+        # fibonacci_points = fibonacci_points + torch.tensor(camera_look_at)
         ts_near_far = view_angles_file.get(
             "ts_near_far",
             [[0.3, 1.3] for _ in range(len(fibonacci_points))]
+        )
+        cfg_n_samples = view_angles_file.get(
+            "n_samples",
+            1024
         )
     else:
         ts_near_far = [
             [0.3, 1.3] for _ in range(len(fibonacci_points))
         ]
+        cfg_n_samples = 1024
 
-    # prepare scene configuration
-    cam = Camera(
-        # for spider
-        position = torch.tensor([-0.085, -0.31, -0.012]),
-        look_at  = torch.tensor(camera_look_at),
-        up       = torch.tensor(up_vector),
-        fov_y    = 60.0,
-        width    = args.image_resolution[0],
-        height   = args.image_resolution[1],
-    )
-    aabb = torch.tensor([[0., 0., 0.], [1., 1., 1.]])
-    cfg = MarchConfig(
-        t_near    = 0.0001,
-        t_far     = 2.0,
-        n_samples = view_angles_file["n_samples"] if "n_samples" in view_angles_file.keys() else 1024,
-        # no use of patch
-        patch_width=16,
-        patch_height=16,
-    )
+    pre_calculated_camera_parameters = []
+    # if fibonacci points are given, directly use them as camera position
+    for fibonacci_point in fibonacci_points:
+        pre_calculated_camera_parameters.append({
+            "position": torch.tensor(fibonacci_point),
+            "look_at":  torch.tensor(camera_look_at),
+            "up":       torch.tensor(camera_up_vector)
+        })
+
+
+    camera_fov_y = 60.0
+    image_width = args.image_resolution[0]
+    image_height = args.image_resolution[1]
+    cfg_patch_width = 16
+    cfg_patch_height = 16
+    
+    camera_configs = []
+    aabb_configs = []
+    march_configs = []
+    # construct camera configs from pre-calculated/selected camera positions/lookat points etc.
+    for batch_idx, (camera, t_near_far) in enumerate(zip(pre_calculated_camera_parameters, ts_near_far)):
+        camera_configs.append(Camera(
+            position = camera["position"],
+            look_at  = camera["look_at"],
+            up       = camera["up"],
+            fov_y    = camera_fov_y,
+            width    = image_width,
+            height   = image_height,
+        ))
+        aabb_configs.append(torch.tensor([[0., 0., 0.], [1., 1., 1.]]))
+        march_configs.append(MarchConfig(
+            t_near    = t_near_far[0],
+            t_far     = t_near_far[1],
+            n_samples = cfg_n_samples,
+            # no use of patch
+            patch_width=cfg_patch_width,
+            patch_height=cfg_patch_height,
+        ))
     
     with torch.no_grad():
-        
-        # need to translate by the center point (look at)
-        # because fibonacci sphere was generated based on the origin as sphere center
-        fibonacci_points = torch.tensor(fibonacci_points)
-        # NOTE: if the points are self-defined (not from fibonacci sphere), we don't need to translate it (offset_points = 0)
-        fibonacci_points = fibonacci_points + offset_points
         
         tfn_lut = build_transfer_function(colorControls, opacityControl, gaussianObjects, lut_size=1024)
         
@@ -342,13 +425,8 @@ if __name__ == "__main__":
             
             # # iterate through all camera position
             # for batch_idx, (pts_coords_values, inside_mask) in enumerate(zip(pts_coords_values_group, inside_mask_group)):
-            for batch_idx, (cam_position, t_near_far) in enumerate(zip(fibonacci_points, ts_near_far)):
-                print(f"Processing batch idx: {batch_idx} / camera position: {cam_position} / t_near_far: {t_near_far}")
-                
-                # set to corresponding camera and config
-                cam.position = cam_position
-                cfg.t_near = t_near_far[0]
-                cfg.t_far = t_near_far[1]
+            for batch_idx, (cam, aabb, cfg) in enumerate(zip(camera_configs, aabb_configs, march_configs)):
+                print(f"Processing batch idx: {batch_idx} / camera position: {cam.position} / t_near_far: {cfg.t_near, cfg.t_far}")
                 
                 pts_coords_values, inside_mask = prepare_pre_calculated_sampled_points(cam, "cuda", cfg, aabb, sampler, "cuda")
                 # HACK: because some dataset's tfn doesn't fully cover raw data's value range
@@ -361,15 +439,15 @@ if __name__ == "__main__":
                                                           inside_mask.reshape(-1, cfg.n_samples), sampler, 
                                                           tfn_lut, cfg, tfn_file_path, light_dir_normalized)
                 # should reshape result back to have H, W
-                result = result.reshape(args.image_resolution[0], args.image_resolution[1], -1)
+                result = result.reshape(cam.height, cam.width, -1)
                                 
                 # save GT images for some instances
                 if instance_idx == 0 or instance_idx == 100 or instance_idx == 200:
                     plt.figure(figsize=(7, 7))
                     data = result.detach().cpu().numpy()
                     im = plt.imshow(data)
-                    plt.title(f"Full render with shadow from camera pos: {cam_position}")
-                    plt.savefig(os.path.join(save_dir,f"GT_{args.image_resolution[0]}x{args.image_resolution[1]}_image_ins_{instance_idx}_cam_{batch_idx}.png"))
+                    plt.title(f"Full render with shadow from camera pos: {cam.position}")
+                    plt.savefig(os.path.join(save_dir,f"GT_{cam.width}x{cam.height}_image_ins_{instance_idx}_cam_{batch_idx}.png"))
                     plt.close()
                 
                 GT_images_this_instance.append(result.cpu())
@@ -385,12 +463,12 @@ if __name__ == "__main__":
     # aabb_configs = []
     # march_configs = []
     poses_tensors = []
-    for batch_idx, (cam_position, t_near_far) in enumerate(zip(fibonacci_points, ts_near_far)):
+    for batch_idx, (cam, cfg) in enumerate(zip(camera_configs, march_configs)):
     
         # compute intrinsics and extrinsics paramters for each view
         K = compute_intrinsics(fov_y_deg=cam.fov_y, image_width=cam.width, image_height=cam.height)
         c2w = compute_extrinsics(
-            position = cam_position,    # camera 3 units back
+            position = cam.position,    # camera 3 units back
             lookat   = cam.look_at,    # looking at origin
             up       = cam.up,    # Y is up
         )
