@@ -252,17 +252,6 @@ if __name__ == "__main__":
     # #    [-0.41648776,  0.90625   , -0.07244915], 30
     #    [ 0.20890468,  0.96875   , -0.13372461]
     # ]
-    # # for mechhand dataset
-    # fibonacci_points = [
-    #     [-0.48411712, -0.875,      -0.00236781],
-    #     [ 0.5781805,  -0.625,      -0.52448285],
-    #     [ 0.23627819, -0.375,       0.8964082 ],
-    #     [-0.83452296, -0.125,      -0.5366064 ],
-    #     [ 0.9778237,   0.125,      -0.16803534],
-    #     [-0.5676294,   0.375,       0.7329201 ],
-    #     [-0.06444251,  0.625,      -0.77796024],
-    #     # [ 0.35537347,  0.875,       0.32876238],
-    # ]
     # for spider dataset
     # fibonacci_points = [
     #     [-0.48411712, -0.875,      -0.00236781],
@@ -311,26 +300,6 @@ if __name__ == "__main__":
         ts_near_far = [
             [0.3, 1.3] for _ in range(len(fibonacci_points))
         ]
-    # # permute indices from spider for mechhand
-    # old selection (leave here just for record)
-    # perm_indices = [12, 14, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 16, 17, 18, 19]
-    # fibonacci_points = [fibonacci_points[perm_idx] for perm_idx in perm_indices]
-
-    # NOTE: used when using pytorch impl. for sampling
-    # # ---- read raw file ----
-    # volume_np = np.fromfile(args.raw_data_file_path, dtype=np.float32)
-    # # reshape to 3D
-    # volume_np = volume_np.reshape((resolution[2], resolution[1], resolution[0]))
-    # # convert to torch tensor
-    # volume_tensor = torch.from_numpy(volume_np)
-    # # normalize volume to 0~1 with in-place operations to save memory usage            
-    # volume_min = volume_tensor.min()
-    # volume_max = volume_tensor.max()
-    # volume_tensor.sub_(volume_min)
-    # volume_tensor.div_(volume_max - volume_min)
-    # # create additional dimension for channel (channel dim in this case is 1)
-    # volume_tensor = volume_tensor.unsqueeze(-1) # (D, H, W, C)
-    # volume_tensor = volume_tensor.to("cuda")
 
     # prepare scene configuration
     cam = Camera(
@@ -361,27 +330,6 @@ if __name__ == "__main__":
         fibonacci_points = fibonacci_points + offset_points
         
         tfn_lut = build_transfer_function(colorControls, opacityControl, gaussianObjects, lut_size=1024)
-        
-        # pts_coords_values_group = []
-        # inside_mask_group = []
-        # # iterate through all camera position
-        # for batch_idx, (cam_position, t_near_far) in enumerate(zip(fibonacci_points, ts_near_far)):
-        #     print(f"Processing batch idx: {batch_idx} / camera position: {cam_position} / t_near_far: {t_near_far}")
-            
-        #     # set to corresponding camera and config
-        #     cam.position = cam_position
-        #     cfg.t_near = t_near_far[0]
-        #     cfg.t_far = t_near_far[1]
-            
-        #     pts_coords_values, inside_mask = prepare_pre_calculated_sampled_points(cam, "cuda", cfg, aabb, sampler, "cuda")
-        #     # HACK: because some dataset's tfn doesn't fully cover raw data's value range
-        #     # need additional process
-        #     pts_coords_values[..., 3] = map_to_tfn_range(pts_coords_values[..., 3], raw_data_min, raw_data_max, tfn_scalar_mapping_range_min, tfn_scalar_mapping_range_max)
-            
-        #     # pts_coords_values_group.append(pts_coords_values.cpu())
-        #     # inside_mask_group.append(inside_mask.cpu())
-        #     pts_coords_values_group.append(pts_coords_values)
-        #     inside_mask_group.append(inside_mask)
         
         pre_cal_GT_images = []
         # iterate through all instances
