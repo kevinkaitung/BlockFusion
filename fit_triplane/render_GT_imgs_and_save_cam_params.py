@@ -282,6 +282,174 @@ def select_cone(points, center_dir, max_angle_in_degree, k=24):
     idx = np.random.choice(len(subset), k, replace=False)
     return subset[idx]
 
+
+def render_and_save_images(args, pre_calculated_camera_parameters, ts_near_far, cfg_n_samples,
+                           colorControls, opacityControl, gaussianObjects,
+                           ins_idx_start, ins_idx_end, pretrained_SIREN_light_dirs, 
+                           sampler, raw_data_min, raw_data_max, 
+                           tfn_scalar_mapping_range_min, tfn_scalar_mapping_range_max,
+                           tfn_file_path, save_dir, save_filename="chunk_000.torch"):
+
+    camera_fov_y = 60.0
+    image_width = args.image_resolution[0]
+    image_height = args.image_resolution[1]
+    cfg_patch_width = 16
+    cfg_patch_height = 16
+    
+    camera_configs = []
+    aabb_configs = []
+    march_configs = []
+    # construct camera configs from pre-calculated/selected camera positions/lookat points etc.
+    for batch_idx, (camera, t_near_far) in enumerate(zip(pre_calculated_camera_parameters, ts_near_far)):
+        camera_configs.append(Camera(
+            position = camera["position"],
+            look_at  = camera["look_at"],
+            up       = camera["up"],
+            fov_y    = camera_fov_y,
+            width    = image_width,
+            height   = image_height,
+        ))
+        aabb_configs.append(torch.tensor([[0., 0., 0.], [1., 1., 1.]]))
+        march_configs.append(MarchConfig(
+            t_near    = t_near_far[0],
+            t_far     = t_near_far[1],
+            n_samples = cfg_n_samples,
+            # no use of patch
+            patch_width=cfg_patch_width,
+            patch_height=cfg_patch_height,
+        ))
+    
+    with torch.no_grad():
+        
+        tfn_lut = build_transfer_function(colorControls, opacityControl, gaussianObjects, lut_size=1024)
+        
+        pre_cal_GT_images = []
+        # iterate through all instances
+        # for instance_idx in tqdm(range(n_instances)):
+        for instance_idx in tqdm(range(ins_idx_start, ins_idx_end)):
+            print(f"Processing instance idx: {instance_idx}")
+            
+            light_dir_normalized = pretrained_SIREN_light_dirs[instance_idx].tolist()
+            GT_images_this_instance = []
+            
+            # # iterate through all camera position
+            # for batch_idx, (pts_coords_values, inside_mask) in enumerate(zip(pts_coords_values_group, inside_mask_group)):
+            for batch_idx, (cam, aabb, cfg) in enumerate(zip(camera_configs, aabb_configs, march_configs)):
+                print(f"Processing batch idx: {batch_idx} / camera position: {cam.position} / t_near_far: {cfg.t_near, cfg.t_far}")
+                
+                pts_coords_values, inside_mask = prepare_pre_calculated_sampled_points(cam, "cuda", cfg, aabb, sampler, "cuda")
+                # HACK: because some dataset's tfn doesn't fully cover raw data's value range
+                # need additional process
+                pts_coords_values[..., 3] = map_to_tfn_range(pts_coords_values[..., 3], raw_data_min, raw_data_max, tfn_scalar_mapping_range_min, tfn_scalar_mapping_range_max)
+            
+                
+                # reshape to align with the input shape expected in ray_march_with_precalculated_pts
+                result = ray_march_with_precalculated_pts(pts_coords_values.reshape(-1, cfg.n_samples, 4), 
+                                                          inside_mask.reshape(-1, cfg.n_samples), sampler, 
+                                                          tfn_lut, cfg, tfn_file_path, light_dir_normalized)
+                # should reshape result back to have H, W
+                result = result.reshape(cam.height, cam.width, -1)
+                                
+                # save GT images for some instances
+                if instance_idx == 0 or instance_idx == 100 or instance_idx == 200:
+                    plt.figure(figsize=(7, 7))
+                    data = result.detach().cpu().numpy()
+                    im = plt.imshow(data)
+                    plt.title(f"Full render with shadow from camera pos: {cam.position}")
+                    plt.savefig(os.path.join(save_dir,f"GT_{cam.width}x{cam.height}_image_ins_{instance_idx}_cam_{batch_idx}.png"))
+                    plt.close()
+                
+                GT_images_this_instance.append(result.cpu())
+                
+            pre_cal_GT_images.append(torch.stack(GT_images_this_instance))
+    
+    # save pre-calculated GT images
+    # pretrained_SIREN["pre_cal_GT_images"] = pre_cal_GT_images
+    
+    # save all camera and marching configs
+    # TODO: integrate with the above code
+    # camera_configs = []
+    # aabb_configs = []
+    # march_configs = []
+    poses_tensors = []
+    for batch_idx, (cam, cfg) in enumerate(zip(camera_configs, march_configs)):
+    
+        # compute intrinsics and extrinsics paramters for each view
+        K = compute_intrinsics(fov_y_deg=cam.fov_y, image_width=cam.width, image_height=cam.height)
+        c2w = compute_extrinsics(
+            position = cam.position,    # camera 3 units back
+            lookat   = cam.look_at,    # looking at origin
+            up       = cam.up,    # Y is up
+        )
+        poses = build_poses_tensor(
+            c2w,
+            fx=K[0,0], fy=K[1,1],
+            cx=K[0,2], cy=K[1,2],
+        )
+        poses_tensors.append(torch.tensor(poses))
+        # camera_configs.append(asdict(Camera(
+        #     position = cam_position,
+        #     look_at  = cam.look_at,
+        #     up       = cam.up,
+        #     fov_y    = cam.fov_y,
+        #     width    = cam.width,
+        #     height   = cam.height,
+        # )))
+        # aabb_configs.append(torch.tensor([[0., 0., 0.], [1., 1., 1.]]))
+        # march_configs.append(asdict(MarchConfig(
+        #     t_near    = t_near_far[0],
+        #     t_far     = t_near_far[1],
+        #     n_samples = cfg.n_samples,
+        #     # no use of patch
+        #     patch_width=cfg.patch_width,
+        #     patch_height=cfg.patch_height,
+        # )))
+    poses_tensors = torch.stack(poses_tensors)
+        
+    # pretrained_SIREN["camera_configs"] = camera_configs
+    # pretrained_SIREN["aabb_configs"] = aabb_configs
+    # pretrained_SIREN["march_configs"] = march_configs
+    # # move those tensors back to cpu for consistency as GT images
+    # pretrained_SIREN["pts_coords_values_group"] = [pts_coords_values.cpu() for pts_coords_values in pts_coords_values_group]
+    # pretrained_SIREN["inside_mask_group"] = [inside_mask.cpu() for inside_mask in inside_mask_group]
+    
+    # torch.save(pretrained_SIREN, os.path.join(save_dir, f"{pretrained_SIREN_file_path_stem}_w_GT_{args.image_resolution[0]}x{args.image_resolution[1]}_imgs.pt"))
+    
+    # print(f"max memory allocated: {torch.cuda.max_memory_allocated()/1024**3:.2f} GB")
+    # print(f"max memory reserved: {torch.cuda.max_memory_reserved()/1024**3:.2f} GB")
+    
+    from PIL import Image
+    from io import BytesIO
+    
+    scenes = []
+    scene_id = 0
+    # NOTE: test on the first group of images first
+    for GT_images_this_instance in pre_cal_GT_images:
+        jpeg_tensors_this_instance = []
+        for batch_idx, GT_image in enumerate(GT_images_this_instance):
+            
+            # 1. Convert to uint8
+            result_uint8 = (GT_image.clamp(0, 1) * 255).byte().cpu().numpy()  # if tensor
+            
+            # 2. Encode to JPEG bytes
+            pil_img = Image.fromarray(result_uint8, mode="RGB")
+            buffer = BytesIO()
+            pil_img.save(buffer, format="JPEG", quality=95)
+            jpeg_bytes = buffer.getvalue()
+            
+            # 3. Convert to uint8 tensor (what the dataset expects)
+            jpeg_tensor = torch.frombuffer(jpeg_bytes, dtype=torch.uint8)
+            jpeg_tensors_this_instance.append(jpeg_tensor)
+        
+        scenes.append({
+            "key": str(scene_id),
+            "cameras": poses_tensors,  # shape [N, 18]: fx,fy,cx,cy, ..., 3x4 w2c
+            "images": jpeg_tensors_this_instance  # list of raw JPEG bytes as uint8 tensors
+        })
+        scene_id += 1
+    
+    torch.save(scenes, os.path.join(save_dir, save_filename))
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
@@ -467,164 +635,10 @@ if __name__ == "__main__":
     # ]
     # cfg_n_samples = 1024
     # ### end section
-
-
-    camera_fov_y = 60.0
-    image_width = args.image_resolution[0]
-    image_height = args.image_resolution[1]
-    cfg_patch_width = 16
-    cfg_patch_height = 16
     
-    camera_configs = []
-    aabb_configs = []
-    march_configs = []
-    # construct camera configs from pre-calculated/selected camera positions/lookat points etc.
-    for batch_idx, (camera, t_near_far) in enumerate(zip(pre_calculated_camera_parameters, ts_near_far)):
-        camera_configs.append(Camera(
-            position = camera["position"],
-            look_at  = camera["look_at"],
-            up       = camera["up"],
-            fov_y    = camera_fov_y,
-            width    = image_width,
-            height   = image_height,
-        ))
-        aabb_configs.append(torch.tensor([[0., 0., 0.], [1., 1., 1.]]))
-        march_configs.append(MarchConfig(
-            t_near    = t_near_far[0],
-            t_far     = t_near_far[1],
-            n_samples = cfg_n_samples,
-            # no use of patch
-            patch_width=cfg_patch_width,
-            patch_height=cfg_patch_height,
-        ))
-    
-    with torch.no_grad():
-        
-        tfn_lut = build_transfer_function(colorControls, opacityControl, gaussianObjects, lut_size=1024)
-        
-        pre_cal_GT_images = []
-        # iterate through all instances
-        # for instance_idx in tqdm(range(n_instances)):
-        for instance_idx in tqdm(range(ins_idx_start, ins_idx_end)):
-            print(f"Processing instance idx: {instance_idx}")
-            
-            light_dir_normalized = pretrained_SIREN_light_dirs[instance_idx].tolist()
-            GT_images_this_instance = []
-            
-            # # iterate through all camera position
-            # for batch_idx, (pts_coords_values, inside_mask) in enumerate(zip(pts_coords_values_group, inside_mask_group)):
-            for batch_idx, (cam, aabb, cfg) in enumerate(zip(camera_configs, aabb_configs, march_configs)):
-                print(f"Processing batch idx: {batch_idx} / camera position: {cam.position} / t_near_far: {cfg.t_near, cfg.t_far}")
-                
-                pts_coords_values, inside_mask = prepare_pre_calculated_sampled_points(cam, "cuda", cfg, aabb, sampler, "cuda")
-                # HACK: because some dataset's tfn doesn't fully cover raw data's value range
-                # need additional process
-                pts_coords_values[..., 3] = map_to_tfn_range(pts_coords_values[..., 3], raw_data_min, raw_data_max, tfn_scalar_mapping_range_min, tfn_scalar_mapping_range_max)
-            
-                
-                # reshape to align with the input shape expected in ray_march_with_precalculated_pts
-                result = ray_march_with_precalculated_pts(pts_coords_values.reshape(-1, cfg.n_samples, 4), 
-                                                          inside_mask.reshape(-1, cfg.n_samples), sampler, 
-                                                          tfn_lut, cfg, tfn_file_path, light_dir_normalized)
-                # should reshape result back to have H, W
-                result = result.reshape(cam.height, cam.width, -1)
-                                
-                # save GT images for some instances
-                if instance_idx == 0 or instance_idx == 100 or instance_idx == 200:
-                    plt.figure(figsize=(7, 7))
-                    data = result.detach().cpu().numpy()
-                    im = plt.imshow(data)
-                    plt.title(f"Full render with shadow from camera pos: {cam.position}")
-                    plt.savefig(os.path.join(save_dir,f"GT_{cam.width}x{cam.height}_image_ins_{instance_idx}_cam_{batch_idx}.png"))
-                    plt.close()
-                
-                GT_images_this_instance.append(result.cpu())
-                
-            pre_cal_GT_images.append(torch.stack(GT_images_this_instance))
-    
-    # save pre-calculated GT images
-    # pretrained_SIREN["pre_cal_GT_images"] = pre_cal_GT_images
-    
-    # save all camera and marching configs
-    # TODO: integrate with the above code
-    # camera_configs = []
-    # aabb_configs = []
-    # march_configs = []
-    poses_tensors = []
-    for batch_idx, (cam, cfg) in enumerate(zip(camera_configs, march_configs)):
-    
-        # compute intrinsics and extrinsics paramters for each view
-        K = compute_intrinsics(fov_y_deg=cam.fov_y, image_width=cam.width, image_height=cam.height)
-        c2w = compute_extrinsics(
-            position = cam.position,    # camera 3 units back
-            lookat   = cam.look_at,    # looking at origin
-            up       = cam.up,    # Y is up
-        )
-        poses = build_poses_tensor(
-            c2w,
-            fx=K[0,0], fy=K[1,1],
-            cx=K[0,2], cy=K[1,2],
-        )
-        poses_tensors.append(torch.tensor(poses))
-        # camera_configs.append(asdict(Camera(
-        #     position = cam_position,
-        #     look_at  = cam.look_at,
-        #     up       = cam.up,
-        #     fov_y    = cam.fov_y,
-        #     width    = cam.width,
-        #     height   = cam.height,
-        # )))
-        # aabb_configs.append(torch.tensor([[0., 0., 0.], [1., 1., 1.]]))
-        # march_configs.append(asdict(MarchConfig(
-        #     t_near    = t_near_far[0],
-        #     t_far     = t_near_far[1],
-        #     n_samples = cfg.n_samples,
-        #     # no use of patch
-        #     patch_width=cfg.patch_width,
-        #     patch_height=cfg.patch_height,
-        # )))
-    poses_tensors = torch.stack(poses_tensors)
-        
-    # pretrained_SIREN["camera_configs"] = camera_configs
-    # pretrained_SIREN["aabb_configs"] = aabb_configs
-    # pretrained_SIREN["march_configs"] = march_configs
-    # # move those tensors back to cpu for consistency as GT images
-    # pretrained_SIREN["pts_coords_values_group"] = [pts_coords_values.cpu() for pts_coords_values in pts_coords_values_group]
-    # pretrained_SIREN["inside_mask_group"] = [inside_mask.cpu() for inside_mask in inside_mask_group]
-    
-    # torch.save(pretrained_SIREN, os.path.join(save_dir, f"{pretrained_SIREN_file_path_stem}_w_GT_{args.image_resolution[0]}x{args.image_resolution[1]}_imgs.pt"))
-    
-    # print(f"max memory allocated: {torch.cuda.max_memory_allocated()/1024**3:.2f} GB")
-    # print(f"max memory reserved: {torch.cuda.max_memory_reserved()/1024**3:.2f} GB")
-    
-    from PIL import Image
-    from io import BytesIO
-    
-    scenes = []
-    scene_id = 0
-    # NOTE: test on the first group of images first
-    for GT_images_this_instance in pre_cal_GT_images:
-        jpeg_tensors_this_instance = []
-        for batch_idx, GT_image in enumerate(GT_images_this_instance):
-            
-            # 1. Convert to uint8
-            result_uint8 = (GT_image.clamp(0, 1) * 255).byte().cpu().numpy()  # if tensor
-            
-            # 2. Encode to JPEG bytes
-            pil_img = Image.fromarray(result_uint8, mode="RGB")
-            buffer = BytesIO()
-            pil_img.save(buffer, format="JPEG", quality=95)
-            jpeg_bytes = buffer.getvalue()
-            
-            # 3. Convert to uint8 tensor (what the dataset expects)
-            jpeg_tensor = torch.frombuffer(jpeg_bytes, dtype=torch.uint8)
-            jpeg_tensors_this_instance.append(jpeg_tensor)
-        
-        scenes.append({
-            "key": str(scene_id),
-            "cameras": poses_tensors,  # shape [N, 18]: fx,fy,cx,cy, ..., 3x4 w2c
-            "images": jpeg_tensors_this_instance  # list of raw JPEG bytes as uint8 tensors
-        })
-        scene_id += 1
-    
-    torch.save(scenes, os.path.join(save_dir, "chunk_000.torch"))
+    render_and_save_images(args, pre_calculated_camera_parameters, ts_near_far, cfg_n_samples,
+                           colorControls, opacityControl, gaussianObjects,
+                           ins_idx_start, ins_idx_end, pretrained_SIREN_light_dirs, 
+                           sampler, raw_data_min, raw_data_max, 
+                           tfn_scalar_mapping_range_min, tfn_scalar_mapping_range_max,
+                           tfn_file_path, save_dir, save_filename="chunk_000.torch")
