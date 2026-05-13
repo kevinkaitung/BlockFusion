@@ -185,28 +185,74 @@ def perturb_camera(base_position, base_lookat, base_up,
         })
     return cameras
 
-def orbit_cameras(base_position, base_lookat, base_up, elevation_deg, 
+# def orbit_cameras(base_position, base_lookat, base_up,
+#                   angle_start, angle_end, n_views=2):
+#     """
+#     Orbit cameras around base_lookat, starting from base_position.
+#     angle_start/end are RELATIVE offsets from the base position angle.
+#     """
+#     # Derive radius and elevation from base_position
+#     offset = base_position - base_lookat               # vector from center to camera
+#     radius = torch.linalg.norm(offset)
+
+#     # Derive base elevation and azimuth from base_position
+#     # y = sin(elev) * r  →  elev = asin(y / r)
+#     base_elev = torch.asin(offset[1] / radius)
+
+#     # x = cos(elev)*cos(az)*r  →  az = atan2(z, x)
+#     base_az = torch.atan2(offset[2], offset[0])
+
+#     angles = torch.deg2rad(torch.linspace(angle_start, angle_end, n_views))
+
+#     cameras = []
+#     for delta_az in angles:
+#         az   = base_az + delta_az    # rotate relative to base azimuth
+#         elev = base_elev             # keep same elevation as base
+
+#         position = base_lookat + radius * torch.tensor([
+#             torch.cos(elev) * torch.cos(az),
+#             torch.sin(elev),
+#             torch.cos(elev) * torch.sin(az),
+#         ])
+#         cameras.append({
+#             "position": position,
+#             "look_at":  base_lookat,
+#             "up":       base_up,
+#         })
+#     return cameras
+
+def orbit_cameras(base_position, base_lookat, base_up,
                   angle_start, angle_end, n_views=2):
     """
-    Cameras on a circular arc, all looking at center.
-    Mimics RE10K's video trajectory style.
+    Orbit cameras around base_lookat, starting from base_position.
+    Assumes -Z is up axis (orbits around Z axis instead of Y axis).
+    angle_start/end are RELATIVE offsets from the base position angle.
     """
-    angles = torch.linspace(angle_start, angle_end, n_views)
-    elev   = torch.deg2rad(torch.tensor(elevation_deg))
-    radius = torch.linalg.norm(base_lookat - base_position)
+    offset = base_position - base_lookat
+    radius = torch.linalg.norm(offset)
+
+    # Z is now the "up" component (was Y before)
+    # elevation measured from XY plane (was XZ plane before)
+    base_elev = torch.asin(offset[2] / radius)          # was offset[1]
+
+    # azimuth rotates in XY plane (was XZ plane before)
+    base_az = torch.atan2(offset[1], offset[0])         # was atan2(z, x)
+
+    angles = torch.deg2rad(torch.linspace(angle_start, angle_end, n_views))
 
     cameras = []
+    for delta_az in angles:
+        az   = base_az + delta_az
+        elev = base_elev
 
-    for angle in angles:
-        az = torch.deg2rad(angle)
         position = base_lookat + radius * torch.tensor([
-            torch.cos(elev) * torch.cos(az),
-            torch.sin(elev),
-            torch.cos(elev) * torch.sin(az),
+            torch.cos(elev) * torch.cos(az),   # X
+            torch.cos(elev) * torch.sin(az),   # Y (was Z before)
+            torch.sin(elev),                   # Z = up (was Y before)
         ])
         cameras.append({
             "position": position,
-            "look_at":   base_lookat,
+            "look_at":  base_lookat,
             "up":       base_up,
         })
     return cameras
@@ -225,6 +271,16 @@ def interpolate_cameras(base_position_a, base_position_b, base_lookat,
             "up":       base_up,
         })
     return cameras
+
+# used to select a cone from fibonacci sphere
+def select_cone(points, center_dir, max_angle_in_degree, k=24):
+    cos_theta = points @ center_dir
+    mask = cos_theta >= np.cos(np.deg2rad(max_angle_in_degree))
+    subset = points[mask]
+    print(f"{subset.shape[0]} points pass thresold")
+    # random or FPS
+    idx = np.random.choice(len(subset), k, replace=False)
+    return subset[idx]
 
 if __name__ == "__main__":
 
@@ -329,28 +385,42 @@ if __name__ == "__main__":
     #     [-0.06444251,  0.625,      -0.77796024],
     #     # [ 0.35537347,  0.875,       0.32876238],
     # ]
+    np.random.seed(42)
     # params for spider
     camera_up_vector = [0.0, 0.0, -1.0]
-    camera_look_at = [0.5, 0.5,  0.5]
-    # for spider dataset (for FFGS)
-    # for dense interpolated camera poses
-    fibonacci_points_start_end = [
-        [0.5, -0.4, 0.3],
-        [0.6, -0.6, 0.45],
-    ]
-    fibonacci_points_start_end = torch.tensor(fibonacci_points_start_end)
-    # interpolate cameras between two points
-    n_views = 24
-    fibonacci_points = []
-    for t in torch.linspace(0, 1, n_views).tolist():
-        fibonacci_points.append(((1-t) * fibonacci_points_start_end[0] + t * fibonacci_points_start_end[1]).tolist())
-    # add a very different view as test set
-    fibonacci_points.append(torch.tensor([-0.1313, -0.2266, 0.2342]))
-    # for small overlap view
+    camera_look_at = [0.5, 0.5,  0.53]
+    
+    ### old section which uses pre-generated fibonacci points as camera positions
+    
+    # # for spider dataset (for FFGS)
+    # # for dense interpolated camera poses
+    # fibonacci_points_start_end = [
+    #     [0.5, -0.4, 0.3],
+    #     [0.6, -0.6, 0.45],
+    # ]
+    # fibonacci_points_start_end = torch.tensor(fibonacci_points_start_end)
+    # # interpolate cameras between two points
+    # n_views = 24
+    # fibonacci_points = []
+    # for t in torch.linspace(0, 1, n_views).tolist():
+    #     fibonacci_points.append(((1-t) * fibonacci_points_start_end[0] + t * fibonacci_points_start_end[1]).tolist())
+    # # add a very different view as test set
+    # fibonacci_points.append(torch.tensor([-0.1313, -0.2266, 0.2342]))
+    # # for small overlap view
+    
     # generate camera positions from fibonacci sphere (which is numpy array)
-    # fibonacci_points = fibonacci_sphere(70)
-    # fibonacci_points = fibonacci_points.astype(np.float32)
-    # fibonacci_points = fibonacci_points + torch.tensor(camera_look_at)
+    # 180 for 45 degree
+    fibonacci_points = fibonacci_sphere(1600)
+    base_camera_pos_vector = np.array([0.5, -0.75, 0.53]) - np.array(camera_look_at)
+    
+    # optionally select the points within a cone
+    fibonacci_points = select_cone(fibonacci_points, base_camera_pos_vector / np.linalg.norm(base_camera_pos_vector), 15, 24)
+    
+    # optionally scale the generated points to have desired radius
+    fibonacci_points = fibonacci_points * (np.linalg.norm(base_camera_pos_vector))
+    
+    fibonacci_points = fibonacci_points + np.array(camera_look_at)
+    fibonacci_points = fibonacci_points.astype(np.float32)
     
     if args.rendered_imgs_view_angles_file_path is not None:
         with open(args.rendered_imgs_view_angles_file_path, 'r') as f:
@@ -359,7 +429,7 @@ if __name__ == "__main__":
         # fibonacci_points = fibonacci_points + torch.tensor(camera_look_at)
         ts_near_far = view_angles_file.get(
             "ts_near_far",
-            [[0.3, 1.3] for _ in range(len(fibonacci_points))]
+            [[0.4, 1.8] for _ in range(len(fibonacci_points))]
         )
         cfg_n_samples = view_angles_file.get(
             "n_samples",
@@ -367,7 +437,7 @@ if __name__ == "__main__":
         )
     else:
         ts_near_far = [
-            [0.3, 1.3] for _ in range(len(fibonacci_points))
+            [0.4, 1.8] for _ in range(len(fibonacci_points))
         ]
         cfg_n_samples = 1024
 
@@ -379,6 +449,24 @@ if __name__ == "__main__":
             "look_at":  torch.tensor(camera_look_at),
             "up":       torch.tensor(camera_up_vector)
         })
+    
+    ### end section
+
+    # ### section to use functions to automatically generate camera positions
+    # num_views = 24
+    # pre_calculated_camera_parameters = orbit_cameras(
+    #     base_position=torch.tensor([0.5, -0.65, 0.53]),
+    #     base_lookat=torch.tensor(camera_look_at),
+    #     base_up=torch.tensor(camera_up_vector),
+    #     angle_start=-45.0,
+    #     angle_end=45.0,
+    #     n_views=num_views
+    # )
+    # ts_near_far = [
+    #     [0.4, 1.5] for _ in range(num_views)
+    # ]
+    # cfg_n_samples = 1024
+    # ### end section
 
 
     camera_fov_y = 60.0
