@@ -104,6 +104,107 @@ class NeurCompNet(torch.nn.Module):
         x = self.net(x) * 0.5 + 0.5                   # to [ 0, 1]
         return x.view(*S, self.n_output_dims)
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, n_input_dims, n_freqs=10, include_input=True):
+        """
+        NeRF positional encoding: maps x to [sin(2^k * pi * x), cos(2^k * pi * x)] for k in [0, L-1].
+
+        Args:
+            n_input_dims:  number of input dimensions (e.g. 3 for XYZ)
+            n_freqs:       number of frequency bands L (NeRF paper uses 10 for position, 4 for direction)
+            include_input: if True, concatenate the raw input to the encoding (recommended)
+        """
+        super().__init__()
+        self.n_input_dims  = n_input_dims
+        self.n_freqs       = n_freqs
+        self.include_input = include_input
+
+        # Precompute frequency bands: [1, 2, 4, ..., 2^(L-1)]
+        freqs = 2.0 ** torch.arange(n_freqs).float()   # shape (L,)
+        self.register_buffer("freqs", freqs)
+
+        # Output dimensionality
+        self.n_output_dims = n_input_dims * (2 * n_freqs + (1 if include_input else 0))
+
+    def forward(self, x):
+        """x: (..., n_input_dims) → (..., n_output_dims)"""
+        # x shape: (..., C)
+        encoded = []
+        if self.include_input:
+            encoded.append(x)
+
+        # x[..., None] * freqs → (..., C, L), then flatten last two dims
+        x_freq = x.unsqueeze(-1) * self.freqs * torch.pi   # (..., C, L)
+        encoded.append(torch.sin(x_freq).flatten(-2))       # (..., C*L)
+        encoded.append(torch.cos(x_freq).flatten(-2))       # (..., C*L)
+
+        return torch.cat(encoded, dim=-1)                   # (..., n_output_dims)
+
+# TODO: consolidate this class with NeurCompNet later
+class NeurCompNet_with_PosEnc(torch.nn.Module):
+    def __init__(
+        self,
+        n_input_dims=3,
+        n_output_dims=1,
+        bias=False,
+        n_hidden_layers=8,
+        n_neurons=256,
+        is_residual=True,
+        use_pos_enc=True,     # <-- toggle positional encoding on/off
+        n_freqs=10,           # <-- number of frequency bands L
+        include_input=True,   # <-- concatenate raw input alongside encoding
+    ):
+        super(NeurCompNet_with_PosEnc, self).__init__()
+
+        self.n_input_dims  = n_input_dims
+        self.n_output_dims = n_output_dims
+        self.n_hidden_layers = n_hidden_layers
+        self.n_layers      = n_hidden_layers + 2
+        self.n_neurons     = n_neurons
+        self.bias          = bias
+        self.is_residual   = is_residual
+        self.use_pos_enc   = use_pos_enc
+
+        # Build positional encoding and update the effective input size
+        if use_pos_enc:
+            self.pos_enc   = PositionalEncoding(n_input_dims, n_freqs=n_freqs, include_input=include_input)
+            net_input_dims = self.pos_enc.n_output_dims   # e.g. 3*(2*10+1) = 63
+        else:
+            self.pos_enc   = nn.Identity()
+            net_input_dims = n_input_dims
+
+        net = []
+        for l in range(self.n_layers):
+            in_dim  = net_input_dims     if l == 0 else self.n_neurons  # <-- use encoded dim for first layer
+            out_dim = self.n_output_dims if l == self.n_layers - 1 else self.n_neurons
+            is_first = (l == 0)
+
+            if l != self.n_layers - 1:
+                if not self.is_residual:
+                    net.append(SineLayer(in_dim, out_dim, bias=True, is_first=is_first))
+                else:
+                    if is_first:
+                        net.append(SineLayer(in_dim, out_dim, bias=True, is_first=is_first))
+                    else:
+                        net.append(SirenResBlock(in_dim, bias=True, ave_first=(l > 1), ave_second=(l == (self.n_layers - 2))))
+            else:
+                final_linear = nn.Linear(in_dim, out_dim)
+                with torch.no_grad():
+                    final_linear.weight.uniform_(-np.sqrt(6 / in_dim) / 30.0, np.sqrt(6 / in_dim) / 30.0)
+                net.append(final_linear)
+
+        self.net = nn.Sequential(*net)
+
+    def forward(self, x):
+        *S, C = x.size()
+        assert C == self.n_input_dims
+
+        x = x.view(-1, self.n_input_dims) * 2 - 1  # to [-1, 1]
+        x = self.pos_enc(x)                         # to [-1, 1]^n_output_dims (sin/cos preserve range)
+        x = self.net(x) * 0.5 + 0.5                # to [ 0, 1]
+        return x.view(*S, self.n_output_dims)
+
+
 # https://github.com/yenchenlin/nerf-pytorch/blob/63a5a630c9abd62b0f21c08703d0ac2ea7d4b9dd/run_nerf_helpers.py#L48
 # copy from HyperDiffusion
 class Embedder:

@@ -19,6 +19,7 @@ import json
 #     import tinycudann as tcnn
 
 from networks import NeurCompNet
+from networks import NeurCompNet_with_PosEnc
 
 # Add parent directory to sys.path
 # TODO: make it more flexible to call timevarying_data_helper anywhere
