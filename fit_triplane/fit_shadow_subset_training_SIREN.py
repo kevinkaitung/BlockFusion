@@ -14,6 +14,7 @@ import torch
 import numpy as np
 import os, sys
 import json
+import math
 
 # if torch.cuda.is_available():
 #     import tinycudann as tcnn
@@ -53,7 +54,19 @@ def update_lr(optimizer, epoch, config):
         if "tri" in param_group['name']:
             param_group['lr'] = config.lr_tri * learning_factor
 
-def training_loop(start_epoch, offset, train_dataloader, value_range, nets, optimizer, config, tensorboard_writer, console_logger):
+# Use inverse sigmoid function to transform the data
+eps=1e-6
+sorted_vals = sorted([math.log(eps / (1 - eps)), math.log((1-eps)/ (1 - (1-eps)))])
+min_value = sorted_vals[0]
+max_value = sorted_vals[1]
+def inverse_sigmoid(y):
+    y = torch.clamp(y, eps, 1 - eps)
+    y = torch.log(y / (1 - y))
+    # for normalizing the value range of inverse sigmoid to 0~1
+    # y = (y - min_value) / (max_value - min_value)
+    return y
+
+def training_loop(start_epoch, offset, train_dataloader, value_range, nets, optimizer, config, tensorboard_writer, console_logger, enable_data_transformation):
     
     for epoch in tqdm(range(start_epoch + 1, start_epoch + config.max_iters + 1)):
         
@@ -64,6 +77,9 @@ def training_loop(start_epoch, offset, train_dataloader, value_range, nets, opti
             # data format: tuple(timestep_index, sample_coords, target_values)
             outputs = []
             targets = data[2]
+            if enable_data_transformation:
+                targets_before_transformed = targets
+                targets = inverse_sigmoid(targets)
             for timestep, sample_coords in zip(data[0], data[1]):
                 # the output of TCNN MLP would be half type
                 # convert to float type
@@ -79,7 +95,11 @@ def training_loop(start_epoch, offset, train_dataloader, value_range, nets, opti
             loss.backward()
             optimizer.step()
             
-            running_loss += loss.item()
+            # if enable data transformation, then transform it back for calculating eval metrics
+            if enable_data_transformation:
+                running_loss += F.mse_loss(torch.sigmoid(outputs), targets_before_transformed).item()
+            else:
+                running_loss += loss.item()
             
         avg_loss = running_loss / len(train_dataloader)
         PSNR_value = (20 * np.log10(value_range / np.sqrt(avg_loss))).item()
@@ -108,6 +128,7 @@ if __name__ == "__main__":
     parser.add_argument('--n_instances', type=int, default=150, help="Number of shadow volumes to generate")
     parser.add_argument('--selected_light_dirs_file_path', type=str)
     parser.add_argument('--output_activation', type=str, default="None")
+    parser.add_argument('--enable_data_transformation', action='store_true')
     args = parser.parse_args()
     
     # fix the random seed for reproducibility
@@ -149,6 +170,11 @@ if __name__ == "__main__":
     if args.selected_light_dirs_file_path:
         console_logger.debug("Selected Light Directions File Path: " + args.selected_light_dirs_file_path)
     console_logger.debug("MLP Output Activation: " + args.output_activation)
+    if args.enable_data_transformation:
+        console_logger.debug("Enable Data Transformation with Inverse Sigmoid Function")
+        enable_data_transformation = True
+    else:
+        enable_data_transformation = False
     
     with open(args.config, 'r') as f:
         config = json.load(f)
@@ -206,7 +232,7 @@ if __name__ == "__main__":
         batch_size=1,
         shuffle=True)
     value_range = sample_dataloader.dataset.value_range
-    sample_net, sample_opt, epoch = training_loop(0, -1, sample_dataloader, value_range, sample_net, sample_opt, sample_config, tensorboard_writer, console_logger)
+    sample_net, sample_opt, epoch = training_loop(0, -1, sample_dataloader, value_range, sample_net, sample_opt, sample_config, tensorboard_writer, console_logger, enable_data_transformation)
     ### section end of pre-optimizing one set of SIREN
     
     # generate subset ckpt first
@@ -303,7 +329,7 @@ if __name__ == "__main__":
             for batch_idx, num_pt in enumerate(train_dataloader.dataset.selected_num_pt_groups):
                 console_logger.debug(f"instance {batch_idx}: {num_pt} points")
         
-        nets, optimizer, epoch = training_loop(start_epoch, offset, train_dataloader, value_range, nets, optimizer, config, tensorboard_writer, console_logger)
+        nets, optimizer, epoch = training_loop(start_epoch, offset, train_dataloader, value_range, nets, optimizer, config, tensorboard_writer, console_logger, enable_data_transformation)
         
         # get the final learning rates of MLP
         for param_group in optimizer.param_groups:
