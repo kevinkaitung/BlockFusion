@@ -5,6 +5,8 @@ from pathlib import Path
 import sys
 from tqdm import tqdm
 from dataclasses import asdict
+from PIL import Image
+from io import BytesIO
 
 current_dir = os.path.abspath(os.path.dirname(__file__))
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -140,6 +142,7 @@ def compute_extrinsics(position, lookat, up):
 
 def c2w_to_w2c(c2w):
     """ Invert C2W to get W2C (what's stored in the .torch file) """
+    # w2c (world space to camera space) is also equivalent to view trans matrix (graphics) or extrinsics params (vision)
     return np.linalg.inv(c2w)
 
 def build_poses_tensor(c2w, fx, fy, cx, cy):
@@ -418,9 +421,6 @@ def render_and_save_images(args, pre_calculated_camera_parameters, ts_near_far, 
     # print(f"max memory allocated: {torch.cuda.max_memory_allocated()/1024**3:.2f} GB")
     # print(f"max memory reserved: {torch.cuda.max_memory_reserved()/1024**3:.2f} GB")
     
-    from PIL import Image
-    from io import BytesIO
-    
     scenes = []
     scene_id = 0
     # NOTE: test on the first group of images first
@@ -558,67 +558,67 @@ if __name__ == "__main__":
     camera_up_vector = [0.0, 0.0, -1.0]
     camera_look_at = [0.5, 0.5,  0.53]
     
-    ### old section which uses pre-generated fibonacci points as camera positions
+    # ### old section which uses pre-generated fibonacci points as camera positions
     
-    # # for spider dataset (for FFGS)
-    # # for dense interpolated camera poses
-    # fibonacci_points_start_end = [
-    #     [0.5, -0.4, 0.3],
-    #     [0.6, -0.6, 0.45],
-    # ]
-    # fibonacci_points_start_end = torch.tensor(fibonacci_points_start_end)
-    # # interpolate cameras between two points
-    # n_views = 24
-    # fibonacci_points = []
-    # for t in torch.linspace(0, 1, n_views).tolist():
-    #     fibonacci_points.append(((1-t) * fibonacci_points_start_end[0] + t * fibonacci_points_start_end[1]).tolist())
-    # # add a very different view as test set
-    # fibonacci_points.append(torch.tensor([-0.1313, -0.2266, 0.2342]))
-    # # for small overlap view
+    # # # for spider dataset (for FFGS)
+    # # # for dense interpolated camera poses
+    # # fibonacci_points_start_end = [
+    # #     [0.5, -0.4, 0.3],
+    # #     [0.6, -0.6, 0.45],
+    # # ]
+    # # fibonacci_points_start_end = torch.tensor(fibonacci_points_start_end)
+    # # # interpolate cameras between two points
+    # # n_views = 24
+    # # fibonacci_points = []
+    # # for t in torch.linspace(0, 1, n_views).tolist():
+    # #     fibonacci_points.append(((1-t) * fibonacci_points_start_end[0] + t * fibonacci_points_start_end[1]).tolist())
+    # # # add a very different view as test set
+    # # fibonacci_points.append(torch.tensor([-0.1313, -0.2266, 0.2342]))
+    # # # for small overlap view
     
-    # generate camera positions from fibonacci sphere (which is numpy array)
-    # 180 for 45 degree
-    fibonacci_points = fibonacci_sphere(1600)
-    base_camera_pos_vector = np.array([0.5, -0.75, 0.53]) - np.array(camera_look_at)
+    # # generate camera positions from fibonacci sphere (which is numpy array)
+    # # 180 for 45 degree
+    # fibonacci_points = fibonacci_sphere(1600)
+    # base_camera_pos_vector = np.array([0.5, -0.75, 0.53]) - np.array(camera_look_at)
     
-    # optionally select the points within a cone
-    fibonacci_points = select_cone(fibonacci_points, base_camera_pos_vector / np.linalg.norm(base_camera_pos_vector), 15, 24)
+    # # optionally select the points within a cone
+    # fibonacci_points = select_cone(fibonacci_points, base_camera_pos_vector / np.linalg.norm(base_camera_pos_vector), 15, 24)
     
-    # optionally scale the generated points to have desired radius
-    fibonacci_points = fibonacci_points * (np.linalg.norm(base_camera_pos_vector))
+    # # optionally scale the generated points to have desired radius
+    # fibonacci_points = fibonacci_points * (np.linalg.norm(base_camera_pos_vector))
     
-    fibonacci_points = fibonacci_points + np.array(camera_look_at)
-    fibonacci_points = fibonacci_points.astype(np.float32)
+    # fibonacci_points = fibonacci_points + np.array(camera_look_at)
+    # fibonacci_points = fibonacci_points.astype(np.float32)
     
-    if args.rendered_imgs_view_angles_file_path is not None:
-        with open(args.rendered_imgs_view_angles_file_path, 'r') as f:
-            view_angles_file = json5.load(f)
-        fibonacci_points = view_angles_file["fibonacci_points"]
-        # fibonacci_points = fibonacci_points + torch.tensor(camera_look_at)
-        ts_near_far = view_angles_file.get(
-            "ts_near_far",
-            [[0.4, 1.8] for _ in range(len(fibonacci_points))]
-        )
-        cfg_n_samples = view_angles_file.get(
-            "n_samples",
-            1024
-        )
-    else:
-        ts_near_far = [
-            [0.4, 1.8] for _ in range(len(fibonacci_points))
-        ]
-        cfg_n_samples = 1024
+    # if args.rendered_imgs_view_angles_file_path is not None:
+    #     with open(args.rendered_imgs_view_angles_file_path, 'r') as f:
+    #         view_angles_file = json5.load(f)
+    #     fibonacci_points = view_angles_file["fibonacci_points"]
+    #     # fibonacci_points = fibonacci_points + torch.tensor(camera_look_at)
+    #     ts_near_far = view_angles_file.get(
+    #         "ts_near_far",
+    #         [[0.4, 1.8] for _ in range(len(fibonacci_points))]
+    #     )
+    #     cfg_n_samples = view_angles_file.get(
+    #         "n_samples",
+    #         1024
+    #     )
+    # else:
+    #     ts_near_far = [
+    #         [0.4, 1.8] for _ in range(len(fibonacci_points))
+    #     ]
+    #     cfg_n_samples = 1024
 
-    pre_calculated_camera_parameters = []
-    # if fibonacci points are given, directly use them as camera position
-    for fibonacci_point in fibonacci_points:
-        pre_calculated_camera_parameters.append({
-            "position": torch.tensor(fibonacci_point),
-            "look_at":  torch.tensor(camera_look_at),
-            "up":       torch.tensor(camera_up_vector)
-        })
+    # pre_calculated_camera_parameters = []
+    # # if fibonacci points are given, directly use them as camera position
+    # for fibonacci_point in fibonacci_points:
+    #     pre_calculated_camera_parameters.append({
+    #         "position": torch.tensor(fibonacci_point),
+    #         "look_at":  torch.tensor(camera_look_at),
+    #         "up":       torch.tensor(camera_up_vector)
+    #     })
     
-    ### end section
+    # ### end section
 
     # ### section to use functions to automatically generate camera positions
     # num_views = 24
@@ -635,6 +635,31 @@ if __name__ == "__main__":
     # ]
     # cfg_n_samples = 1024
     # ### end section
+    
+    ### section to generate camera from Fibonacci Sphere points and their neighboring points
+    fibonacci_points = fibonacci_sphere(24)
+    
+    base_camera_pos_vector = np.array([0.5, -0.75, 0.53]) - np.array(camera_look_at)
+    fibonacci_points = fibonacci_points * (np.linalg.norm(base_camera_pos_vector))
+    
+    fibonacci_points = fibonacci_points + np.array(camera_look_at)
+    fibonacci_points = fibonacci_points.astype(np.float32)
+    
+    pre_calculated_camera_parameters = []
+    for fibonacci_point in fibonacci_points:
+        pre_calculated_camera_parameters.extend(orbit_cameras(
+            base_position=torch.tensor(fibonacci_point),
+            base_lookat=torch.tensor(camera_look_at),
+            base_up=torch.tensor(camera_up_vector),
+            angle_start=0.0,
+            angle_end=8.0,
+            n_views=2
+        ))
+    ts_near_far = [
+        [0.4, 1.5] for _ in range(len(fibonacci_points) * 2)
+    ]
+    cfg_n_samples = 1024
+    ### end section
     
     render_and_save_images(args, pre_calculated_camera_parameters, ts_near_far, cfg_n_samples,
                            colorControls, opacityControl, gaussianObjects,
